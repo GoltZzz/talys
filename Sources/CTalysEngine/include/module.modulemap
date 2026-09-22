@@ -1,0 +1,5 @@
+module CTalysEngine [system] {
+    header "talys_engine.h"
+    link "talys_engine"
+    export *
+}

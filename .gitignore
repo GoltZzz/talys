@@ -1,0 +1,22 @@
+# Swift / SPM
+.build/
+Packages/
+*.xcodeproj
+*.xcworkspace
+.swiftpm/
+
+# Zig
+zig-cache/
+.zig-cache/
+zig-out/
+
+# Application Bundle & Binaries
+Talys.app/
+*.o
+*.a
+*.dylib
+
+# macOS
+.DS_Store
+*.swp
+*~
