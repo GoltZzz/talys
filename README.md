@@ -15,7 +15,9 @@ Talys pairs a high-performance **Zig** tiling engine (pure computation, no OS de
 │  • CGEvent tap (global hotkey capture)                 │
 │  • AXUIElement / Accessibility API (window control)    │
 │  • AXObserver & NSWorkspace (reactive auto-tiling)     │
-│  • NSStatusItem (menu bar icon & controls)             │
+│  • FloatingBarPanel & SwiftUI Omarchy Bar Overlay      │
+│  • SystemMetrics (IOKit battery, CoreWLAN, CoreAudio)  │
+│  • TalysDesktopState (@Observable shared state)        │
 │  • TOML config parser & hot-reload                     │
 │  • App lifecycle & LaunchAgent daemon                  │
 │                                                        │
@@ -64,7 +66,15 @@ talys/
         ├── WindowObserver.swift      # AXObserver for window creation/destruction/focus
         ├── AppLifecycleObserver.swift# NSWorkspace observer for app launch/terminate
         ├── Config.swift              # TOML config loader (~/.config/talys/config.toml)
-        └── StatusBarController.swift # macOS menu bar status item
+        ├── TalysDesktopState.swift   # Observable state for workspaces and metrics
+        ├── SystemMetrics.swift       # Native hardware & temporal monitors
+        ├── FloatingBarPanel.swift    # Non-activating floating NSPanel overlay
+        ├── OmarchyBarView.swift      # SwiftUI themed status bar view
+        ├── BarController.swift       # Overlay controller and brand menu manager
+        ├── Theme.swift               # Built-in palettes, custom theme loading, ThemeManager
+        ├── Launcher.swift            # Fuzzy app + command launcher panel
+        ├── BorderController.swift    # Active window border overlay
+        └── ShellRunner.swift         # Detached shell execution for exec binds
 ```
 
 ---
@@ -106,83 +116,95 @@ On first launch:
 
 ## Default Hotkeys
 
+`Mod` is `Alt` by default — change it with `[general] mod = "..."` (`alt`, `cmd`, `ctrl`, `hyper`, `meh`, or a combo like `ctrl+alt+cmd`).
+
 | Keybind | Action | Description |
 |---------|--------|-------------|
-| `Alt + H` | Focus Left | Move focus to nearest window on the left |
-| `Alt + J` | Focus Down | Move focus to nearest window below |
-| `Alt + K` | Focus Up | Move focus to nearest window above |
-| `Alt + L` | Focus Right | Move focus to nearest window on the right |
-| `Alt + Shift + H` | Swap Left | Swap focused window with neighbor to the left |
-| `Alt + Shift + J` | Swap Down | Swap focused window with neighbor below |
-| `Alt + Shift + K` | Swap Up | Swap focused window with neighbor above |
-| `Alt + Shift + L` | Swap Right | Swap focused window with neighbor to the right |
-| `Alt + Space` | Toggle Float | Toggle focused window between tiled and floating |
-| `Alt + Q` | Close Window | Close the focused window |
-| `Alt + R` | Retile All | Re-query all standard windows and recompute layout |
-| `Alt + [` | Shrink Split | Decrease split ratio of focused window (-5%) |
-| `Alt + ]` | Grow Split | Increase split ratio of focused window (+5%) |
-| `Alt + F` | Toggle Fullscreen | Monocle mode for focused window |
-| `Alt + Tab` | Cycle Layout | Cycle between Dwindle → Master-Stack → Monocle |
-| `Alt + 1..9` | Switch Workspace | Switch to virtual workspace 1..9 |
-| `Alt + Shift + 1..9` | Move to Workspace | Move focused window to workspace 1..9 |
+| `Mod + Space` | Launcher | Fuzzy search apps and Talys commands (themes, reload, retile…) |
+| `Mod + Return` | Terminal | Default `[[bind]]` exec entry (opens a Terminal window) |
+| `Mod + H/J/K/L` | Focus | Move focus to nearest window left/down/up/right |
+| `Mod + Shift + H/J/K/L` | Swap | Swap focused window with its neighbor |
+| `Mod + V` | Toggle Float | Toggle focused window between tiled and floating |
+| `Mod + Q` | Close Window | Close the focused window |
+| `Mod + R` | Retile All | Re-query all standard windows and recompute layout |
+| `Mod + [` / `Mod + ]` | Resize Split | Shrink / grow split ratio of focused window (±5%) |
+| `Mod + F` | Toggle Fullscreen | Monocle mode for focused window |
+| `Mod + Tab` | Cycle Layout | Cycle between Dwindle → Master-Stack → Monocle |
+| `Mod + S` | Toggle Scratchpad | Show/hide stashed windows centered over any workspace |
+| `Mod + Shift + S` | Move to Scratchpad | Stash focused window (or pull it back out if already stashed) |
+| `Mod + Shift + T` | Cycle Theme | Switch to the next theme (persisted to config) |
+| `Mod + 1..9` | Switch Workspace | Switch to virtual workspace 1..9 |
+| `Mod + Shift + 1..9` | Move to Workspace | Move focused window to workspace 1..9 |
+
+Any action you leave out of `[keybindings]` keeps its default. If two binds claim the same keys, the one you wrote explicitly wins and a warning is logged.
 
 ---
 
 ## Configuration (`~/.config/talys/config.toml`)
 
-Talys automatically creates `~/.config/talys/config.toml` with default settings on initial launch:
+Talys creates `~/.config/talys/config.toml` on first launch. Every key is optional; missing keys and sections fall back to defaults.
 
 ```toml
+[general]
+layout = "dwindle"          # "dwindle", "master_stack", "monocle"
+mod = "alt"                 # modifier substituted for "mod" in binds
+theme = "catppuccin_mocha"  # catppuccin_mocha, tokyo_night, gruvbox, rose_pine, nord, or a custom theme
+
 [gaps]
 inner = 8.0
 outer = 10.0
 
-[general]
-layout = "dwindle" # Options: "dwindle", "master_stack", "monocle"
+[borders]                   # Hyprland-style active window border
+enabled = true
+width = 2.0
+radius = 12.0
+gradient = true             # accent → secondary gradient
 
 [animations]
 enabled = true
 duration_ms = 180.0
 
 [keybindings]
-focus_left = "alt+h"
-focus_down = "alt+j"
-focus_up = "alt+k"
-focus_right = "alt+l"
-swap_left = "alt+shift+h"
-swap_down = "alt+shift+j"
-swap_up = "alt+shift+k"
-swap_right = "alt+shift+l"
-toggle_float = "alt+space"
-close_window = "alt+q"
-retile = "alt+r"
-resize_shrink = "alt+["
-resize_grow = "alt+]"
-toggle_fullscreen = "alt+f"
-cycle_layout = "alt+tab"
+focus_left = "mod+h"
+launcher = "mod+space"
+toggle_float = "mod+v"
+# ...see the generated file for every action
 
-switch_workspace_1 = "alt+1"
-switch_workspace_2 = "alt+2"
-switch_workspace_3 = "alt+3"
-switch_workspace_4 = "alt+4"
-switch_workspace_5 = "alt+5"
-switch_workspace_6 = "alt+6"
-switch_workspace_7 = "alt+7"
-switch_workspace_8 = "alt+8"
-switch_workspace_9 = "alt+9"
+# Shell command binds (run via /bin/sh, Homebrew paths on PATH)
+[[bind]]
+keys = "mod+return"
+exec = "open -na Ghostty"
 
-move_to_workspace_1 = "alt+shift+1"
-move_to_workspace_2 = "alt+shift+2"
-move_to_workspace_3 = "alt+shift+3"
-move_to_workspace_4 = "alt+shift+4"
-move_to_workspace_5 = "alt+shift+5"
-move_to_workspace_6 = "alt+shift+6"
-move_to_workspace_7 = "alt+shift+7"
-move_to_workspace_8 = "alt+shift+8"
-move_to_workspace_9 = "alt+shift+9"
+[[bind]]
+keys = "mod+b"
+exec = "open -a Safari"
+
+[[window_rules]]
+app = "Spotify"
+workspace = 3
 ```
 
-You can reload your configuration anytime from the menu bar item or by modifying the file and clicking **Reload Config**.
+Check a config without starting the window manager:
+
+```bash
+.build/release/talys --check-config ~/.config/talys/config.toml
+```
+
+### Themes
+
+Built-in: `catppuccin_mocha`, `tokyo_night`, `gruvbox`, `rose_pine`, `nord`. Themes recolor the bar, the launcher and window borders live. Switch from the launcher (`Theme: …`), the TALYS menu → Themes, or `Mod + Shift + T`. The choice is written back to `config.toml`.
+
+Custom themes go in `~/.config/talys/themes/<name>.toml`. Any key you omit is inherited from `extends`:
+
+```toml
+extends = "tokyo_night"
+display_name = "My Theme"
+accent = "#ff79c6"
+secondary = "#8be9fd"
+border_active = "#ff79c6"     # optional, defaults to accent
+border_active_2 = "#8be9fd"   # optional, defaults to secondary
+# also: base, mantle, crust, surface0, surface1, overlay0, text, subtext0, green, red, yellow, border_inactive
+```
 
 ---
 

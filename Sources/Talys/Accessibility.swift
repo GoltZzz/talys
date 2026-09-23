@@ -17,42 +17,41 @@ public struct ManagedWindow: @unchecked Sendable {
 public enum AccessibilityHelper {
 
     public static func getAllStandardWindows() -> [ManagedWindow] {
-        var result: [ManagedWindow] = []
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .flatMap { getStandardWindows(for: $0) }
+    }
 
-        let apps = NSWorkspace.shared.runningApplications.filter {
-            $0.activationPolicy == .regular
+    /// On-screen standard windows of one app; windows parked offscreen (hidden workspaces, scratchpad) are skipped.
+    public static func getStandardWindows(for app: NSRunningApplication) -> [ManagedWindow] {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var windowsRef: CFTypeRef?
+
+        let axErr = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
+        guard axErr == .success, let windows = windowsRef as? [AXUIElement] else {
+            return []
         }
 
-        for app in apps {
-            let appElement = AXUIElementCreateApplication(app.processIdentifier)
-            var windowsRef: CFTypeRef?
-
-            let axErr = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
-            guard axErr == .success, let windows = windowsRef as? [AXUIElement] else {
+        var result: [ManagedWindow] = []
+        for window in windows {
+            guard isStandardWindow(window) else {
                 continue
             }
 
-            for window in windows {
-                guard isStandardWindow(window) else {
-                    continue
-                }
+            let title = getTitle(for: window) ?? app.localizedName ?? "Untitled"
+            let frame = getFrame(for: window) ?? .zero
 
-                let title = getTitle(for: window) ?? app.localizedName ?? "Untitled"
-                let frame = getFrame(for: window) ?? .zero
-
-                if frame.origin.x < -10000 || frame.origin.y < -10000 {
-                    continue
-                }
-
-                result.append(ManagedWindow(
-                    element: window,
-                    pid: app.processIdentifier,
-                    title: title,
-                    frame: frame
-                ))
+            if ParkingLot.isParked(frame) {
+                continue
             }
-        }
 
+            result.append(ManagedWindow(
+                element: window,
+                pid: app.processIdentifier,
+                title: title,
+                frame: frame
+            ))
+        }
         return result
     }
 
@@ -142,6 +141,14 @@ public enum AccessibilityHelper {
             if err != .success { ok = false }
         }
         return ok
+    }
+
+    /// Moves a window without touching its size (used for parking, so it can snap back unchanged).
+    @discardableResult
+    public static func setPosition(for element: AXUIElement, to point: CGPoint) -> Bool {
+        var origin = point
+        guard let posVal = AXValueCreate(.cgPoint, &origin) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posVal) == .success
     }
 
     public static func focusWindow(element: AXUIElement, pid: pid_t) {

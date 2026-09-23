@@ -40,8 +40,8 @@ public final class WindowAnimator: @unchecked Sendable {
             let start = item.currentFrame
             let target = item.targetFrame
 
-            if start.origin.x < -1000 || start.origin.y < -1000 ||
-               target.origin.x < -1000 || target.origin.y < -1000 {
+            // Never fly a window in from (or out to) the parking lot.
+            if ParkingLot.isParked(start) || ParkingLot.isParked(target) {
                 AccessibilityHelper.setFrame(for: item.element, frame: target)
                 continue
             }
@@ -95,6 +95,11 @@ public final class WindowAnimator: @unchecked Sendable {
         for item in items {
             let current = isFinished ? item.targetFrame : interpolate(from: item.startFrame, to: item.targetFrame, t: t)
             AccessibilityHelper.setFrame(for: item.element, frame: current)
+        }
+
+        // The timer runs on the main queue, so the border can follow the window each frame.
+        MainActor.assumeIsolated {
+            BorderController.shared.refresh()
         }
     }
 

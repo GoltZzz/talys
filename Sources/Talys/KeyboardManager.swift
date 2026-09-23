@@ -12,6 +12,11 @@ public enum KeyAction: Sendable, CustomStringConvertible {
     case cycleLayout
     case switchWorkspace(UInt8)
     case moveToWorkspace(UInt8)
+    case exec(String)
+    case toggleLauncher
+    case toggleScratchpad
+    case moveToScratchpad
+    case cycleTheme
 
     public var description: String {
         switch self {
@@ -25,6 +30,11 @@ public enum KeyAction: Sendable, CustomStringConvertible {
         case .cycleLayout: return "cycleLayout"
         case .switchWorkspace(let ws): return "switchWorkspace(\(ws))"
         case .moveToWorkspace(let ws): return "moveToWorkspace(\(ws))"
+        case .exec(let cmd): return "exec(\(cmd))"
+        case .toggleLauncher: return "toggleLauncher"
+        case .toggleScratchpad: return "toggleScratchpad"
+        case .moveToScratchpad: return "moveToScratchpad"
+        case .cycleTheme: return "cycleTheme"
         }
     }
 }
@@ -57,40 +67,7 @@ public final class KeyboardManager: @unchecked Sendable {
     }
 
     public func setupDefaultBindings() {
-        bindings.removeAll()
-
-        bindings[KeyBinding(keyCode: 4, alt: true)] = .focusDirection(0)
-        bindings[KeyBinding(keyCode: 38, alt: true)] = .focusDirection(1)
-        bindings[KeyBinding(keyCode: 40, alt: true)] = .focusDirection(2)
-        bindings[KeyBinding(keyCode: 37, alt: true)] = .focusDirection(3)
-
-        bindings[KeyBinding(keyCode: 4, shift: true, alt: true)] = .swapDirection(0)
-        bindings[KeyBinding(keyCode: 38, shift: true, alt: true)] = .swapDirection(1)
-        bindings[KeyBinding(keyCode: 40, shift: true, alt: true)] = .swapDirection(2)
-        bindings[KeyBinding(keyCode: 37, shift: true, alt: true)] = .swapDirection(3)
-
-        bindings[KeyBinding(keyCode: 49, alt: true)] = .toggleFloat
-
-        bindings[KeyBinding(keyCode: 12, alt: true)] = .closeWindow
-
-        bindings[KeyBinding(keyCode: 15, alt: true)] = .retile
-
-        bindings[KeyBinding(keyCode: 33, alt: true)] = .resize(-0.05)
-        bindings[KeyBinding(keyCode: 30, alt: true)] = .resize(0.05)
-
-        bindings[KeyBinding(keyCode: 3, alt: true)] = .toggleFullscreen
-
-        bindings[KeyBinding(keyCode: 48, alt: true)] = .cycleLayout
-
-        let digitKeyCodes: [(UInt8, UInt16)] = [
-            (1, 18), (2, 19), (3, 20), (4, 21), (5, 23),
-            (6, 22), (7, 26), (8, 28), (9, 25)
-        ]
-
-        for (ws, code) in digitKeyCodes {
-            bindings[KeyBinding(keyCode: code, alt: true)] = .switchWorkspace(ws)
-            bindings[KeyBinding(keyCode: code, shift: true, alt: true)] = .moveToWorkspace(ws)
-        }
+        bindings = ConfigManager.buildBindings(for: TalysConfig())
     }
 
     public func start() -> Bool {

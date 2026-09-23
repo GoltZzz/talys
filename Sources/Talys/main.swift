@@ -3,7 +3,7 @@ import CTalysEngine
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var statusBarController: StatusBarController?
+    private var barController: BarController?
     private let tilingController = TilingController.shared
     private let keyboardManager = KeyboardManager()
     private let lifecycleObserver = AppLifecycleObserver()
@@ -41,6 +41,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     tc.switchWorkspace(ws)
                 case .moveToWorkspace(let ws):
                     tc.moveToWorkspace(ws)
+                case .exec(let command):
+                    ShellRunner.run(command)
+                case .toggleLauncher:
+                    LauncherController.shared.toggle()
+                case .toggleScratchpad:
+                    tc.toggleScratchpad()
+                case .moveToScratchpad:
+                    tc.moveFocusedToScratchpad()
+                case .cycleTheme:
+                    ThemeManager.shared.cycle()
                 }
             }
         }
@@ -53,40 +63,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(1)
         }
 
-        let status = StatusBarController()
-        status.onToggleEnabled = { enabled in
+        let bar = BarController(config: config.bar)
+        bar.onToggleEnabled = { enabled in
             TilingController.shared.isEnabled = enabled
             print("[Talys] Tiling \(enabled ? "enabled" : "disabled")")
         }
-        status.onRetileAll = {
+        bar.onRetileAll = {
             TilingController.shared.retileAll()
         }
-        status.onReloadConfig = { [weak self] in
-            guard let self = self else { return }
-            let cfg = ConfigManager.loadConfig()
-            ConfigManager.applyConfig(cfg, to: self.tilingController, keyboard: self.keyboardManager)
-            print("[Talys] Configuration reloaded.")
+        bar.onCycleLayout = {
+            TilingController.shared.cycleLayout()
         }
-        status.onSwitchWorkspace = { ws in
-            TilingController.shared.switchWorkspace(ws)
+        bar.onReloadConfig = { [weak self] in
+            self?.reloadConfig()
         }
-        self.statusBarController = status
+        bar.onSelectTheme = { [weak self] name in
+            self?.selectTheme(name)
+        }
+        bar.onSwitchWorkspace = { ws in
+            // Clicking the active workspace pill shouldn't bounce you elsewhere.
+            TilingController.shared.switchWorkspace(ws, backAndForth: false)
+        }
+        self.barController = bar
 
-        tilingController.onWorkspaceChanged = { [weak self] ws in
-            self?.statusBarController?.updateActiveWorkspace(ws)
+        LauncherController.shared.commandProvider = { [weak self] in
+            self?.launcherCommands() ?? []
         }
 
+        SystemMetricsService.shared.start()
         lifecycleObserver.start()
 
         tilingController.retileAll()
 
-        print("[Talys] Daemon running with workspaces 1..9, animations, window rules, and menu bar item.")
+        print("[Talys] Daemon running with workspaces 1..9, Omarchy floating status bar, animations, and window rules.")
+    }
+
+    private func reloadConfig() {
+        let cfg = ConfigManager.loadConfig()
+        ConfigManager.applyConfig(cfg, to: tilingController, keyboard: keyboardManager)
+        barController?.updateConfig(cfg.bar)
+        print("[Talys] Configuration reloaded.")
+    }
+
+    private func selectTheme(_ name: String) {
+        if ThemeManager.shared.apply(named: name) {
+            ConfigManager.persistTheme(name)
+        }
+    }
+
+    private func launcherCommands() -> [LauncherItem] {
+        let tc = TilingController.shared
+        let current = ThemeManager.shared.current.name
+        var items: [LauncherItem] = ThemeManager.shared.availableThemes().map { theme in
+            .command("theme.\(theme.name)", "Theme: \(theme.displayName)",
+                     subtitle: theme.name == current ? "Current theme" : "Switch theme",
+                     symbol: "paintpalette.fill") { [weak self] in
+                self?.selectTheme(theme.name)
+            }
+        }
+        items += [
+            .command("scratchpad", "Toggle Scratchpad", subtitle: "Show or hide stashed windows", symbol: "tray.full.fill") {
+                tc.toggleScratchpad()
+            },
+            .command("retile", "Retile All Windows", subtitle: "Re-scan and tile the current workspace", symbol: "square.grid.2x2.fill") {
+                tc.retileAll()
+            },
+            .command("layout", "Cycle Layout", subtitle: "Dwindle → Master-Stack → Monocle", symbol: "square.split.bottomrightquarter") {
+                tc.cycleLayout()
+            },
+            .command("tiling", tc.isEnabled ? "Disable Tiling" : "Enable Tiling", subtitle: "Toggle the tiling engine", symbol: "power") {
+                tc.isEnabled.toggle()
+            },
+            .command("reload", "Reload Config", subtitle: ConfigManager.configURL.path, symbol: "arrow.clockwise") { [weak self] in
+                self?.reloadConfig()
+            },
+            .command("edit", "Edit Config", subtitle: ConfigManager.configURL.path, symbol: "doc.text.fill") {
+                NSWorkspace.shared.open(ConfigManager.configURL)
+            },
+            .command("quit", "Quit Talys", subtitle: "Stop the window manager", symbol: "xmark.circle.fill") {
+                NSApplication.shared.terminate(nil)
+            },
+        ]
+        return items
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        SystemMetricsService.shared.stop()
+        barController?.hide()
+        BorderController.shared.hide()
         lifecycleObserver.stop()
         keyboardManager.stop()
         WindowAnimator.shared.stop()
+        tilingController.unparkAll()
         print("[Talys] Stopped.")
     }
 }
@@ -97,6 +165,12 @@ struct TalysApp {
 
     @MainActor
     static func main() {
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--check-config") {
+            ConfigManager.checkConfig(path: args.indices.contains(i + 1) ? args[i + 1] : nil)
+            return
+        }
+
         let app = NSApplication.shared
         let del = AppDelegate()
         delegate = del
