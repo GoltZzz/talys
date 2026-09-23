@@ -411,12 +411,12 @@ pub const BspEngine = struct {
                 var stack_min_w: f64 = 0;
                 var stack_min_hs: [MAX_WINDOWS]f64 = undefined;
                 for (1..limit) |i| {
-                    const m = mins.get(windows[i]);
+                    const m = mins.tile(windows[i]);
                     stack_min_w = @max(stack_min_w, m.width);
                     stack_min_hs[i - 1] = m.height;
                 }
                 var widths: [2]f64 = undefined;
-                _ = constraints.distribute(usable_rect.width, inner, &.{ mins.get(windows[0]).width, stack_min_w }, &widths);
+                _ = constraints.distribute(usable_rect.width, inner, &.{ mins.tile(windows[0]).width, stack_min_w }, &widths);
                 const master_w = widths[0];
                 const stack_w = widths[1];
 
@@ -496,7 +496,7 @@ pub const BspEngine = struct {
         if (node_idx == null_node) return 0;
         switch (self.nodes[node_idx].data) {
             .leaf => |leaf| {
-                const m = mins.get(leaf.window_id);
+                const m = mins.tile(leaf.window_id);
                 return if (along_width) m.width else m.height;
             },
             .branch => |branch| {
@@ -711,7 +711,7 @@ pub const BspEngine = struct {
         var rects: [MAX_WINDOWS]Rect = undefined;
         const n = self.calculateLayout(screen_rect, gaps, mins, MAX_WINDOWS, &ids, &rects);
         for (0..n) |i| {
-            const m = mins.get(ids[i]);
+            const m = mins.tile(ids[i]);
             if (m.width > rects[i].width + 1 or m.height > rects[i].height + 1) return false;
         }
         return true;
@@ -863,13 +863,13 @@ test "BspEngine dwindle moves the divider for minimum widths" {
     engine.addWindow(1);
     engine.addWindow(2);
     var mins = MinSizes{};
-    mins.set(1, .{ .width = 700 });
+    mins.set(1, .{ .width = 650 });
 
     var ids: [10]WindowId = undefined;
     var rects: [10]Rect = undefined;
     _ = engine.calculateLayout(.{ .x = 0, .y = 0, .width = 1000, .height = 500 }, .{ .inner = 10, .outer = 0 }, &mins, 10, &ids, &rects);
-    try std.testing.expectEqual(@as(f64, 700), rects[0].width);
-    try std.testing.expectEqual(@as(f64, 290), rects[1].width);
+    try std.testing.expectEqual(@as(f64, 650), rects[0].width);
+    try std.testing.expectEqual(@as(f64, 340), rects[1].width);
 }
 
 test "BspEngine dwindle stacks when side by side can't fit" {
@@ -913,4 +913,26 @@ test "BspEngine scrolling layout navigation" {
     const count = engine.calculateLayout(screen, gaps, &MinSizes.empty, 10, &ids, &rects);
     try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqual(@as(f64, 500), rects[0].height); // back to a lone window, full height
+}
+
+test "BspEngine dwindle never hands a window a sliver tile" {
+    // tmux, Claude, Docker, Chrome as opened on a 1680×1050 screen: Docker's 940pt minimum used to
+    // squeeze Chrome (no known minimum width) into a 2pt column hidden behind Docker.
+    var engine = BspEngine.init();
+    engine.addWindow(1);
+    engine.addWindow(2);
+    engine.addWindow(3);
+    engine.addWindow(4);
+    var mins = MinSizes{};
+    mins.set(2, .{ .height = 400 });
+    mins.set(3, .{ .width = 940, .height = 600 });
+    mins.set(4, .{ .height = 469 });
+
+    var ids: [10]WindowId = undefined;
+    var rects: [10]Rect = undefined;
+    const n = engine.calculateLayout(.{ .x = 0, .y = 34, .width = 1680, .height = 1016 }, .{ .inner = 8, .outer = 10 }, &mins, 10, &ids, &rects);
+    for (0..n) |i| {
+        try std.testing.expect(rects[i].width >= constraints.min_tile.width);
+        try std.testing.expect(rects[i].height >= constraints.min_tile.height);
+    }
 }

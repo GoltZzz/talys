@@ -8,6 +8,10 @@ pub const Size = struct {
     height: f64 = 0,
 };
 
+/// Smallest tile any window gets, whatever its app reports: one whose real minimum isn't known yet must not be
+/// squeezed into a sliver it can't actually shrink to, where it ends up hidden behind its neighbour.
+pub const min_tile = Size{ .width = 300, .height = 150 };
+
 /// Smallest size each window's app accepts, as learned by the host (0 = unknown / no limit).
 pub const MinSizes = struct {
     ids: [MAX_ENTRIES]WindowId = undefined,
@@ -25,6 +29,12 @@ pub const MinSizes = struct {
             if (self.ids[i] == wid) return self.sizes[i];
         }
         return .{};
+    }
+
+    /// The window's minimum, raised to `min_tile`: what a tile must give it.
+    pub fn tile(self: *const MinSizes, wid: WindowId) Size {
+        const m = self.get(wid);
+        return .{ .width = @max(m.width, min_tile.width), .height = @max(m.height, min_tile.height) };
     }
 
     pub fn set(self: *MinSizes, wid: WindowId, size: Size) void {
