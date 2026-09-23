@@ -132,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SpotlightTakeover.shared.adjustBindings(&keyboardManager.bindings, config: config)
         MissionControlShortcuts.shared.sync(with: keyboardManager.bindings)
         MenuBarAutoHide.shared.apply(enabled: config.bar.enabled && config.bar.hide_macos_menu_bar)
+        SystemMetricsService.shared.setClock12Hour(config.bar.clock_12h)
     }
 
     private func selectTheme(_ name: String) {

@@ -205,83 +205,10 @@ public final class BarController: NSObject {
         menu.popUp(positioning: nil, at: mouseLocation, in: nil)
     }
 
+    /// Toggles the sound panel, centred under the pointer and hanging just below the bar.
     public func showVolumeMenu() {
-        let state = TalysDesktopState.shared
-        let menu = NSMenu(title: "Sound")
-
-        let header = NSMenuItem(title: state.outputDeviceName.isEmpty ? "Sound" : state.outputDeviceName, action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-
-        let sliderItem = NSMenuItem()
-        sliderItem.view = makeVolumeSliderView(value: Double(state.volumePercent))
-        menu.addItem(sliderItem)
-
-        let muteItem = NSMenuItem(title: "Mute", action: #selector(toggleMuteClicked), keyEquivalent: "")
-        muteItem.target = self
-        muteItem.state = state.isMuted ? .on : .off
-        menu.addItem(muteItem)
-
-        if state.outputDevices.count > 1 {
-            menu.addItem(NSMenuItem.separator())
-            let outputHeader = NSMenuItem(title: "Output", action: nil, keyEquivalent: "")
-            outputHeader.isEnabled = false
-            menu.addItem(outputHeader)
-            for device in state.outputDevices {
-                let item = NSMenuItem(title: device.name, action: #selector(outputDeviceClicked(_:)), keyEquivalent: "")
-                item.target = self
-                item.tag = Int(device.id)
-                item.state = device.name == state.outputDeviceName ? .on : .off
-                menu.addItem(item)
-            }
-        }
-
-        menu.addItem(NSMenuItem.separator())
-        let settingsItem = NSMenuItem(title: "Sound Settings...", action: #selector(soundSettingsClicked), keyEquivalent: "")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-    }
-
-    private func makeVolumeSliderView(value: Double) -> NSView {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 30))
-
-        let low = NSImageView(image: NSImage(systemSymbolName: "speaker.fill", accessibilityDescription: nil) ?? NSImage())
-        low.contentTintColor = .secondaryLabelColor
-        low.frame = NSRect(x: 16, y: 7, width: 14, height: 16)
-        container.addSubview(low)
-
-        let slider = NSSlider(value: value, minValue: 0, maxValue: 100, target: self, action: #selector(volumeSliderChanged(_:)))
-        slider.isContinuous = true
-        slider.controlSize = .small
-        slider.frame = NSRect(x: 36, y: 5, width: 168, height: 20)
-        container.addSubview(slider)
-
-        let high = NSImageView(image: NSImage(systemSymbolName: "speaker.wave.3.fill", accessibilityDescription: nil) ?? NSImage())
-        high.contentTintColor = .secondaryLabelColor
-        high.frame = NSRect(x: 208, y: 7, width: 20, height: 16)
-        container.addSubview(high)
-
-        return container
-    }
-
-    @objc private func volumeSliderChanged(_ sender: NSSlider) {
-        AudioController.shared.setVolume(Float(sender.doubleValue / 100))
-    }
-
-    @objc private func toggleMuteClicked() {
-        AudioController.shared.toggleMute()
-    }
-
-    @objc private func outputDeviceClicked(_ sender: NSMenuItem) {
-        AudioController.shared.selectOutput(AudioDeviceID(sender.tag))
-    }
-
-    @objc private func soundSettingsClicked() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension") {
-            NSWorkspace.shared.open(url)
-        }
+        let top = (panel?.frame.minY ?? NSScreen.main?.frame.maxY ?? 0) - 6
+        AudioPanelController.shared.toggle(anchorX: NSEvent.mouseLocation.x, top: top, on: panel?.screen)
     }
 
     /// Shows the action's configured hotkey as the item's shortcut hint, or none if unbound.

@@ -223,7 +223,7 @@ private struct RightIslandView: View {
             }
             .buttonStyle(.plain)
 
-            // Audio Volume: click for menu, right-click to mute, scroll to adjust
+            // Audio Volume: click for the sound panel, right-click to mute, scroll to adjust
             HStack(spacing: 3) {
                 Image(systemName: volumeIcon)
                     .font(.system(size: 10))

@@ -20,5 +20,11 @@
     <true/>
     <key>NSAccessibilityUsageDescription</key>
     <string>Talys needs accessibility access to manage and tile your windows.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Talys shows a live microphone level in the sound panel while it's open. Audio is never recorded or stored.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>macOS only reveals the Wi-Fi network name to apps with Location access. Talys uses it to show your network in the bar.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>macOS only reveals the Wi-Fi network name to apps with Location access. Talys uses it to show your network in the bar.</string>
 </dict>
 </plist>

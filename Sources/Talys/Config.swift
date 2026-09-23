@@ -122,8 +122,8 @@ public struct BarConfig: Codable, Sendable {
     public var margin_horizontal: Double = 14.0
     public var gap: Double = 8.0
     public var theme: String = "catppuccin_mocha"
-    public var clock_format: String = "EEE MMM d  HH:mm"
-    public var clock_format_alt: String = "HH:mm:ss"
+    /// 12-hour clock ("9:43 PM") instead of 24-hour ("21:43").
+    public var clock_12h: Bool = true
     /// Auto-hide the macOS menu bar while Talys runs; your own setting comes back on quit.
     public var hide_macos_menu_bar: Bool = true
 
@@ -134,8 +134,7 @@ public struct BarConfig: Codable, Sendable {
         margin_horizontal: Double = 14.0,
         gap: Double = 8.0,
         theme: String = "catppuccin_mocha",
-        clock_format: String = "EEE MMM d  HH:mm",
-        clock_format_alt: String = "HH:mm:ss",
+        clock_12h: Bool = true,
         hide_macos_menu_bar: Bool = true
     ) {
         self.enabled = enabled
@@ -144,8 +143,7 @@ public struct BarConfig: Codable, Sendable {
         self.margin_horizontal = margin_horizontal
         self.gap = gap
         self.theme = theme
-        self.clock_format = clock_format
-        self.clock_format_alt = clock_format_alt
+        self.clock_12h = clock_12h
         self.hide_macos_menu_bar = hide_macos_menu_bar
     }
 
@@ -158,8 +156,7 @@ public struct BarConfig: Codable, Sendable {
         margin_horizontal = try c.decodeIfPresent(Double.self, forKey: .margin_horizontal) ?? d.margin_horizontal
         gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? d.gap
         theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? d.theme
-        clock_format = try c.decodeIfPresent(String.self, forKey: .clock_format) ?? d.clock_format
-        clock_format_alt = try c.decodeIfPresent(String.self, forKey: .clock_format_alt) ?? d.clock_format_alt
+        clock_12h = try c.decodeIfPresent(Bool.self, forKey: .clock_12h) ?? d.clock_12h
         hide_macos_menu_bar = try c.decodeIfPresent(Bool.self, forKey: .hide_macos_menu_bar) ?? d.hide_macos_menu_bar
     }
 }
@@ -280,6 +277,7 @@ height = 34.0
 margin_top = 6.0
 margin_horizontal = 14.0
 gap = 8.0
+clock_12h = true            # 12-hour clock (9:43 PM); false for 24-hour (21:43)
 hide_macos_menu_bar = true  # Auto-hide the macOS menu bar while Talys runs; restored on quit
 
 [gaps]

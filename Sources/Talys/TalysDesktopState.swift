@@ -1,4 +1,5 @@
 import Cocoa
+import CoreAudio
 import Observation
 import CTalysEngine
 
@@ -28,8 +29,16 @@ public final class TalysDesktopState {
     public var wifiSSID: String = "Wi-Fi"
     public var volumePercent: Int = 50
     public var isMuted: Bool = false
+    public var outputVolumeSettable: Bool = true
+    public var outputDeviceID: AudioDeviceID = 0
     public var outputDeviceName: String = ""
-    public var outputDevices: [AudioOutputDevice] = []
+    public var outputDevices: [AudioDevice] = []
+    public var inputVolumePercent: Int = 0
+    public var isInputMuted: Bool = false
+    public var inputVolumeSettable: Bool = true
+    public var inputDeviceID: AudioDeviceID = 0
+    public var inputDeviceName: String = ""
+    public var inputDevices: [AudioDevice] = []
     public var timeString: String = ""
     public var dateString: String = ""
     public var showAltClock: Bool = false

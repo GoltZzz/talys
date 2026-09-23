@@ -1,6 +1,7 @@
 import Cocoa
 import IOKit.ps
 import CoreWLAN
+import CoreLocation
 
 @MainActor
 public final class SystemMetricsService {
@@ -10,14 +11,24 @@ public final class SystemMetricsService {
     private let timeFormatter = DateFormatter()
     private let dateFormatter = DateFormatter()
     private let altTimeFormatter = DateFormatter()
+    /// macOS 14+ hides the Wi-Fi SSID from apps without Location access.
+    private let locationManager = CLLocationManager()
 
     public init() {
-        timeFormatter.dateFormat = "HH:mm"
         dateFormatter.dateFormat = "EEE MMM d"
-        altTimeFormatter.dateFormat = "HH:mm:ss"
+        setClock12Hour(true)
+    }
+
+    public func setClock12Hour(_ twelveHour: Bool) {
+        timeFormatter.dateFormat = twelveHour ? "h:mm a" : "HH:mm"
+        altTimeFormatter.dateFormat = twelveHour ? "h:mm:ss a" : "HH:mm:ss"
+        refreshAll()
     }
 
     public func start() {
+        if locationManager.authorizationStatus == .notDetermined {
+            locationManager.requestWhenInUseAuthorization()
+        }
         refreshAll()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -80,8 +91,8 @@ public final class SystemMetricsService {
             return (false, "Off")
         }
 
+        // ssid() is nil without Location access; fall back to the generic label.
         let ssid = interface.ssid() ?? "Wi-Fi"
-        let rssi = interface.rssiValue()
-        return (rssi != 0, ssid)
+        return (interface.rssiValue() != 0, ssid)
     }
 }
