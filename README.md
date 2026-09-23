@@ -1,4 +1,8 @@
-# Talys
+<p align="center">
+  <img src="Resources/logo.svg" width="96" alt="Talys logo: a cracked egg">
+</p>
+
+<h1 align="center">Talys</h1>
 
 A custom tiling window manager for macOS inspired by Hyprland and Omarchy.
 
@@ -74,6 +78,9 @@ talys/
         ├── Theme.swift               # Built-in palettes, custom theme loading, ThemeManager
         ├── Launcher.swift            # Fuzzy app + command launcher panel
         ├── BorderController.swift    # Active window border overlay
+        ├── SpaceMonitor.swift        # Home macOS Space tracking; pauses tiling elsewhere
+        ├── MissionControlShortcuts.swift # Disables clashing Mission Control keys while running
+        ├── SymbolicHotKeys.swift     # Read/write macOS system shortcuts
         └── ShellRunner.swift         # Detached shell execution for exec binds
 ```
 
@@ -205,6 +212,16 @@ border_active = "#ff79c6"     # optional, defaults to accent
 border_active_2 = "#8be9fd"   # optional, defaults to secondary
 # also: base, mantle, crust, surface0, surface1, overlay0, text, subtext0, green, red, yellow, border_inactive
 ```
+
+---
+
+## Talys and macOS Desktops (Spaces)
+
+Talys workspaces replace macOS desktops, so Talys works best with a single desktop:
+
+- **Home desktop:** the desktop Talys launches on. On any other desktop, or in a native-fullscreen app, Talys pauses (the bar shows **PAUSED**) and resumes when you come back. Use `mod+f` for fullscreen instead.
+- **Extra desktops:** if you have more than one, Talys asks once whether to open Mission Control so you can remove them. It never removes them itself.
+- **Clashing shortcuts:** if a Mission Control shortcut (e.g. Ctrl+1 "Switch to Desktop 1") uses the same keys as a Talys binding, Talys asks once to turn it off while it runs. It's put back when Talys quits, or from the launcher with "Restore Mission Control Shortcuts".
 
 ---
 

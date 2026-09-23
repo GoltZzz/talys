@@ -13,6 +13,9 @@ public final class BarController: NSObject {
     public var onSwitchWorkspace: ((UInt8) -> Void)?
     public var onCycleLayout: (() -> Void)?
     public var onSelectTheme: ((String) -> Void)?
+    public var onToggleHideMenuBar: ((Bool) -> Void)?
+    /// Looks up the live key binding for an action so menu hints match the real hotkeys.
+    public var bindingProvider: ((KeyAction) -> KeyBinding?)?
 
     public init(config: BarConfig = BarConfig()) {
         self.barConfig = config
@@ -134,19 +137,27 @@ public final class BarController: NSObject {
         toggleItem.target = self
         menu.addItem(toggleItem)
 
-        let retileItem = NSMenuItem(title: "Retile All", action: #selector(retileClicked), keyEquivalent: "r")
+        let menuBarItem = NSMenuItem(title: "Hide macOS Menu Bar", action: #selector(toggleHideMenuBarClicked), keyEquivalent: "")
+        menuBarItem.target = self
+        menuBarItem.state = barConfig.hide_macos_menu_bar ? .on : .off
+        menu.addItem(menuBarItem)
+
+        let retileItem = NSMenuItem(title: "Retile All", action: #selector(retileClicked), keyEquivalent: "")
         retileItem.target = self
+        applyShortcut(for: .retile, to: retileItem)
         menu.addItem(retileItem)
 
         let cycleItem = NSMenuItem(title: "Cycle Layout", action: #selector(cycleLayoutClicked), keyEquivalent: "")
         cycleItem.target = self
+        applyShortcut(for: .cycleLayout, to: cycleItem)
         menu.addItem(cycleItem)
 
         let wsMenu = NSMenu()
         for ws in 1...9 {
-            let item = NSMenuItem(title: "Workspace \(ws)", action: #selector(workspaceClicked(_:)), keyEquivalent: "\(ws)")
+            let item = NSMenuItem(title: "Workspace \(ws)", action: #selector(workspaceClicked(_:)), keyEquivalent: "")
             item.tag = ws
             item.target = self
+            applyShortcut(for: .switchWorkspace(UInt8(ws)), to: item)
             if ws == Int(TalysDesktopState.shared.activeWorkspace) {
                 item.state = .on
             }
@@ -181,7 +192,7 @@ public final class BarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "Quit Talys", action: #selector(quitClicked), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit Talys", action: #selector(quitClicked), keyEquivalent: "")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -190,10 +201,45 @@ public final class BarController: NSObject {
         menu.popUp(positioning: nil, at: mouseLocation, in: nil)
     }
 
+    /// Shows the action's configured hotkey as the item's shortcut hint, or none if unbound.
+    private func applyShortcut(for action: KeyAction, to item: NSMenuItem) {
+        guard let binding = bindingProvider?(action),
+              let key = Self.menuKeyEquivalent(for: binding.keyCode) else { return }
+        var mask: NSEvent.ModifierFlags = []
+        if binding.cmd { mask.insert(.command) }
+        if binding.alt { mask.insert(.option) }
+        if binding.ctrl { mask.insert(.control) }
+        if binding.shift { mask.insert(.shift) }
+        item.keyEquivalent = key
+        item.keyEquivalentModifierMask = mask
+    }
+
+    /// Maps a virtual key code to the string NSMenuItem needs to render it (⇥, ␣, ←, F1…).
+    private static func menuKeyEquivalent(for keyCode: UInt16) -> String? {
+        let special: [UInt16: Int] = [
+            48: 0x09, 49: 0x20, 36: 0x0D, 53: 0x1B, 51: 0x08,
+            123: NSLeftArrowFunctionKey, 124: NSRightArrowFunctionKey,
+            125: NSDownArrowFunctionKey, 126: NSUpArrowFunctionKey,
+            122: NSF1FunctionKey, 120: NSF2FunctionKey, 99: NSF3FunctionKey, 118: NSF4FunctionKey,
+            96: NSF5FunctionKey, 97: NSF6FunctionKey, 98: NSF7FunctionKey, 100: NSF8FunctionKey,
+            101: NSF9FunctionKey, 109: NSF10FunctionKey, 103: NSF11FunctionKey, 111: NSF12FunctionKey,
+        ]
+        if let scalar = special[keyCode].flatMap(UnicodeScalar.init) {
+            return String(Character(scalar))
+        }
+        let printable = "abcdefghijklmnopqrstuvwxyz0123456789-=[];',./\\`".map(String.init)
+        return printable.first { ConfigManager.keyCodeForString($0) == keyCode }
+    }
+
     @objc private func toggleEnabledClicked() {
         let newState = !TalysDesktopState.shared.isTilingEnabled
         TalysDesktopState.shared.isTilingEnabled = newState
         onToggleEnabled?(newState)
+    }
+
+    @objc private func toggleHideMenuBarClicked() {
+        barConfig.hide_macos_menu_bar.toggle()
+        onToggleHideMenuBar?(barConfig.hide_macos_menu_bar)
     }
 
     @objc private func retileClicked() {

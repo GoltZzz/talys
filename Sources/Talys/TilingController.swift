@@ -30,6 +30,12 @@ public final class TilingController {
     private var scratchpadVisible = false
     /// Windows currently sitting in the parking lot (hidden workspaces and the stashed scratchpad).
     private var parked: Set<TalysWindowId> = []
+    /// Where the last layout put each tiled window on the active workspace.
+    private var layoutTargets: [TalysWindowId: CGRect] = [:]
+    /// Newly added windows, until when they're held to their tile. Some apps restore a saved frame a beat
+    /// after showing the window; each such move is undone as it happens (see `windowFrameChanged`).
+    private var settling: [TalysWindowId: TimeInterval] = [:]
+    private static let settleDuration: TimeInterval = 1.0
     /// Workspace we last switched away from, for back-and-forth.
     private var previousWorkspace: UInt8?
 
@@ -48,6 +54,12 @@ public final class TilingController {
             BorderController.shared.refresh()
         }
     }
+
+    /// True while the user is on a macOS Space other than Talys's home one (see `SpaceMonitor`).
+    public private(set) var isAwayFromHome = false
+
+    /// Tiling runs only when enabled and on the home Space; elsewhere Talys can't see its windows.
+    private var isActive: Bool { isEnabled && !isAwayFromHome }
 
     private let lock = NSLock()
 
@@ -170,7 +182,7 @@ public final class TilingController {
     /// Returns true when the window was newly added.
     @discardableResult
     public func addWindow(element: AXUIElement, pid: pid_t, title: String) -> Bool {
-        guard isEnabled else { return false }
+        guard isActive else { return false }
         guard AccessibilityHelper.isStandardWindow(element) else { return false }
 
         lock.lock()
@@ -209,13 +221,9 @@ public final class TilingController {
 
             // Snap the new window straight into its tile; neighbours still animate.
             applyLayout(snapping: [wid])
-            // Some apps restore their saved frame right after showing the window; re-assert once.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, self.windowMap[wid] != nil else { return }
-                    self.applyLayout(snapping: [wid])
-                }
-            }
+            let now = ProcessInfo.processInfo.systemUptime
+            settling = settling.filter { $0.value > now }
+            settling[wid] = now + Self.settleDuration
         }
         TalysDesktopState.shared.updateOccupiedWorkspaces()
         return true
@@ -225,7 +233,7 @@ public final class TilingController {
     /// Returns how many on-screen windows of the app are tracked afterwards.
     @discardableResult
     public func adoptWindows(of app: NSRunningApplication) -> Int {
-        guard isEnabled else { return 0 }
+        guard isActive else { return 0 }
         let windows = AccessibilityHelper.getStandardWindows(for: app)
         for w in windows {
             addWindow(element: w.element, pid: w.pid, title: w.title)
@@ -296,6 +304,7 @@ public final class TilingController {
             BorderController.shared.setTarget(nil)
             return
         }
+        guard !isAwayFromHome else { return }
         // Stray focus events from windows we just parked must not steal the border, title, or the
         // workspace's remembered focus.
         guard !parked.contains(record.id) else { return }
@@ -319,7 +328,7 @@ public final class TilingController {
     }
 
     public func focusDirection(_ direction: UInt8) {
-        guard isEnabled else { return }
+        guard isActive else { return }
         syncCurrentFocus()
         let screenRect = Self.getAxScreenRect()
         let targetWid = talys_engine_focus_direction(direction, screenRect)
@@ -337,7 +346,7 @@ public final class TilingController {
     }
 
     public func swapDirection(_ direction: UInt8) {
-        guard isEnabled else { return }
+        guard isActive else { return }
         syncCurrentFocus()
         let screenRect = Self.getAxScreenRect()
         if talys_engine_swap_direction(direction, screenRect) {
@@ -353,7 +362,7 @@ public final class TilingController {
     }
 
     public func toggleFloat() {
-        guard !scratchpadWindowFocused else { return }
+        guard !isAwayFromHome, !scratchpadWindowFocused else { return }
         syncCurrentFocus()
         let currentFocus = talys_engine_get_focus()
         guard currentFocus != 0 else { return }
@@ -364,6 +373,8 @@ public final class TilingController {
     }
 
     public func closeFocusedWindow() {
+        // The engine's focus is a home window; closing it from another Space would close the wrong thing.
+        guard !isAwayFromHome else { return }
         if let front = AccessibilityHelper.getFocusedWindow(), let record = findRecord(for: front.element), isScratchpad(record.id) {
             AccessibilityHelper.closeWindow(element: record.element)
             return
@@ -383,21 +394,21 @@ public final class TilingController {
     }
 
     public func resizeFocused(_ delta: Double) {
-        guard isEnabled else { return }
+        guard isActive else { return }
         syncCurrentFocus()
         talys_engine_resize_focused(delta)
         applyLayout()
     }
 
     public func toggleFullscreen() {
-        guard isEnabled else { return }
+        guard isActive else { return }
         talys_engine_toggle_fullscreen()
         print("[TilingController] Fullscreen: \(talys_engine_is_fullscreen())")
         applyLayout()
     }
 
     public func cycleLayout() {
-        guard isEnabled else { return }
+        guard isActive else { return }
         talys_engine_cycle_layout()
         TalysDesktopState.shared.updateLayoutModeFromEngine()
         let mode = Int32(talys_engine_get_layout_mode())
@@ -414,7 +425,7 @@ public final class TilingController {
     /// Switches instantly: hidden windows are parked at full size, shown ones snap into their tiles.
     /// Asking for the active workspace jumps back to the previous one when `backAndForth` is set.
     public func switchWorkspace(_ requested: UInt8, backAndForth: Bool = true) {
-        guard isEnabled else { return }
+        guard isActive else { return }
         let currentWs = talys_engine_get_active_workspace()
         var target = requested
         if target == currentWs {
@@ -467,7 +478,7 @@ public final class TilingController {
     }
 
     public func moveToWorkspace(_ target: UInt8) {
-        guard isEnabled, !scratchpadWindowFocused else { return }
+        guard isActive, !scratchpadWindowFocused else { return }
         syncCurrentFocus()
         let currentFocus = talys_engine_get_focus()
         guard currentFocus != 0 else { return }
@@ -498,7 +509,7 @@ public final class TilingController {
     }
 
     public func retileAll() {
-        guard isEnabled else { return }
+        guard isActive else { return }
         print("[TilingController] Retiling all windows...")
 
         // The engine is about to forget which workspace each window was on; bring parked ones
@@ -532,7 +543,7 @@ public final class TilingController {
 
     /// `snapping`: windows placed instantly instead of animated (e.g. freshly opened ones).
     public func applyLayout(snapping: Set<TalysWindowId> = []) {
-        guard isEnabled else { return }
+        guard isActive else { return }
         let screenRect = Self.getAxScreenRect()
         let maxCount = 128
 
@@ -540,6 +551,7 @@ public final class TilingController {
         var outRects = [TalysRect](repeating: TalysRect(x: 0, y: 0, width: 0, height: 0), count: maxCount)
 
         let count = Int(talys_engine_calculate_layout(screenRect, maxCount, &outIds, &outRects))
+        layoutTargets.removeAll()
         guard count > 0 else {
             BorderController.shared.refresh()
             return
@@ -557,6 +569,7 @@ public final class TilingController {
             guard let record = records[wid] else { continue }
 
             let targetFrame = CGRect(x: r.x, y: r.y, width: r.width, height: r.height)
+            layoutTargets[wid] = targetFrame
             let currentFrame = snapping.contains(wid) ? targetFrame : (AccessibilityHelper.getFrame(for: record.element) ?? targetFrame)
 
             animationFrames.append((element: record.element, currentFrame: currentFrame, targetFrame: targetFrame))
@@ -564,6 +577,61 @@ public final class TilingController {
 
         WindowAnimator.shared.animate(frames: animationFrames)
         BorderController.shared.refresh()
+    }
+
+    /// A window moved or resized. Parked ones get the curtain re-fitted; settling ones that the app pulled out
+    /// of their tile are snapped back.
+    public func windowFrameChanged(element: AXUIElement) {
+        guard isActive, let record = findRecord(for: element) else { return }
+        let wid = record.id
+
+        if parked.contains(wid) {
+            coverParked()
+            return
+        }
+
+        guard let deadline = settling[wid] else { return }
+        guard ProcessInfo.processInfo.systemUptime < deadline else {
+            settling.removeValue(forKey: wid)
+            return
+        }
+        guard !talys_engine_is_floating(wid),
+              !WindowAnimator.shared.isAnimating(element),
+              let target = layoutTargets[wid],
+              let frame = AccessibilityHelper.getFrame(for: element) else { return }
+
+        let drift = max(abs(frame.minX - target.minX), abs(frame.minY - target.minY),
+                        abs(frame.width - target.width), abs(frame.height - target.height))
+        if drift >= 2 {
+            AccessibilityHelper.setFrame(for: element, frame: target)
+        }
+    }
+
+    // MARK: - Home Space
+
+    /// Pauses on other Spaces, then picks up where it left off, adopting windows that appeared meanwhile.
+    public func setAwayFromHome(_ away: Bool) {
+        guard away != isAwayFromHome else { return }
+        isAwayFromHome = away
+        TalysDesktopState.shared.isAwayFromHome = away
+
+        if away {
+            print("[TilingController] Paused: not on the home desktop.")
+            WindowAnimator.shared.stop()
+            BorderController.shared.setTarget(nil)
+            CurtainController.shared.hide()
+            showActiveWindowInfo(nil)
+            return
+        }
+
+        print("[TilingController] Resumed on the home desktop.")
+        guard isEnabled else { return }
+        for w in AccessibilityHelper.getAllStandardWindows() {
+            addWindow(element: w.element, pid: w.pid, title: w.title)
+        }
+        applyLayout()
+        refreshCurtain()
+        syncCurrentFocus()
     }
 
     // MARK: - Scratchpad
@@ -580,7 +648,7 @@ public final class TilingController {
 
     /// Sends the focused window to the scratchpad, or back to the active workspace if it's already there.
     public func moveFocusedToScratchpad() {
-        guard isEnabled, let front = AccessibilityHelper.getFocusedWindow(), let record = findRecord(for: front.element) else { return }
+        guard isActive, let front = AccessibilityHelper.getFocusedWindow(), let record = findRecord(for: front.element) else { return }
 
         if isScratchpad(record.id) {
             scratchpad.removeAll { $0 == record.id }
@@ -611,7 +679,7 @@ public final class TilingController {
     }
 
     public func toggleScratchpad() {
-        guard isEnabled, !scratchpad.isEmpty else { return }
+        guard isActive, !scratchpad.isEmpty else { return }
         scratchpadVisible.toggle()
 
         lock.lock()
@@ -661,16 +729,18 @@ public final class TilingController {
         AccessibilityHelper.setPosition(for: record.element, to: ParkingLot.parkPoint())
     }
 
-    /// Covers whatever sliver of the parked windows macOS keeps on screen. Re-checks shortly after,
-    /// since some apps settle their position a beat later.
+    /// Covers whatever sliver of the parked windows macOS keeps on screen. Apps that settle their position
+    /// a beat later are re-covered when they move (see `windowFrameChanged`).
     private func refreshCurtain() {
         coverParked()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            MainActor.assumeIsolated { TilingController.shared.coverParked() }
-        }
     }
 
     private func coverParked() {
+        // The curtain shows on every Space, but parked windows only exist on the home one.
+        guard !isAwayFromHome else {
+            CurtainController.shared.hide()
+            return
+        }
         lock.lock()
         let elements = parked.compactMap { windowMap[$0]?.element }
         lock.unlock()

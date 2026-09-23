@@ -73,9 +73,10 @@ private struct LeftIslandView: View {
                 onShowBrandMenu?()
             }) {
                 HStack(spacing: 4) {
-                    Image(systemName: "rectangle.split.2x1.fill")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(desktopState.isTilingEnabled ? Palette.accent : Palette.overlay0)
+                    TalysEggMark()
+                        .stroke(desktopState.isTilingEnabled ? Palette.accent : Palette.overlay0,
+                                style: StrokeStyle(lineWidth: 0.8, lineCap: .round, lineJoin: .round))
+                        .frame(width: 14, height: 16)
                     Text("TALYS")
                         .font(.system(size: 10, weight: .black, design: .monospaced))
                         .foregroundColor(Palette.text)
@@ -115,6 +116,22 @@ private struct LeftIslandView: View {
             .padding(.vertical, 2)
             .background(Palette.base.opacity(0.5))
             .clipShape(Capsule())
+
+            // Paused while on another macOS desktop or a fullscreen app
+            if desktopState.isAwayFromHome {
+                HStack(spacing: 3) {
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("PAUSED")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                }
+                .foregroundColor(Palette.crust)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Palette.yellow)
+                .clipShape(Capsule())
+                .help("Talys is paused on this desktop. Go back to the home desktop to resume tiling.")
+            }
 
             // Scratchpad indicator
             if desktopState.scratchpadCount > 0 {
@@ -320,5 +337,16 @@ struct VisualEffectBlur: NSViewRepresentable {
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = material
         nsView.blendingMode = blendingMode
+    }
+}
+
+/// The cracked-egg brand mark at bar size: just the shells, since the eyes and doodles blur at 16pt.
+struct TalysEggMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        // Inset by half a stroke so the outline isn't clipped at the frame edge.
+        let t = TalysLogo.transform(fitting: rect.insetBy(dx: 0.4, dy: 0.4))
+        let mark = CGMutablePath()
+        mark.addPath(TalysLogo.shells, transform: t)
+        return Path(mark)
     }
 }

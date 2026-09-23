@@ -82,7 +82,7 @@ public enum AccessibilityHelper {
         var windowRef: CFTypeRef?
 
         if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
-           let windowElem = windowRef {
+           let windowElem = windowRef, CFGetTypeID(windowElem) == AXUIElementGetTypeID() {
             return (windowElem as! AXUIElement, frontApp.processIdentifier)
         }
         return nil
@@ -109,15 +109,19 @@ public enum AccessibilityHelper {
         var sizeVal: CFTypeRef?
 
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posVal) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeVal) == .success else {
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeVal) == .success,
+              let posVal, CFGetTypeID(posVal) == AXValueGetTypeID(),
+              let sizeVal, CFGetTypeID(sizeVal) == AXValueGetTypeID() else {
             return nil
         }
 
         var origin = CGPoint.zero
         var size = CGSize.zero
 
-        AXValueGetValue(posVal as! AXValue, .cgPoint, &origin)
-        AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
+        guard AXValueGetValue(posVal as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(sizeVal as! AXValue, .cgSize, &size) else {
+            return nil
+        }
 
         return CGRect(origin: origin, size: size)
     }
@@ -163,7 +167,7 @@ public enum AccessibilityHelper {
     public static func closeWindow(element: AXUIElement) {
         var closeButtonRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(element, kAXCloseButtonAttribute as CFString, &closeButtonRef) == .success,
-           let closeButton = closeButtonRef {
+           let closeButton = closeButtonRef, CFGetTypeID(closeButton) == AXUIElementGetTypeID() {
             let err = AXUIElementPerformAction(closeButton as! AXUIElement, kAXPressAction as CFString)
             if err == .success {
                 return

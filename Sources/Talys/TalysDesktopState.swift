@@ -14,6 +14,7 @@ public final class TalysDesktopState {
     public var activeWindowTitle: String = "Desktop"
     public var activeAppIcon: NSImage? = nil
     public var isTilingEnabled: Bool = true
+    public var isAwayFromHome: Bool = false
     public var scratchpadCount: Int = 0
     public var scratchpadVisible: Bool = false
 

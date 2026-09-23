@@ -111,6 +111,13 @@ public final class WindowAnimator: @unchecked Sendable {
         return CGRect(x: x, y: y, width: w, height: h)
     }
 
+    /// True while `element` is mid-animation, so its in-between frames aren't mistaken for an app moving it.
+    public func isAnimating(_ element: AXUIElement) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return windows.contains { CFEqual($0.element, element) }
+    }
+
     public func stop() {
         lock.lock()
         defer { lock.unlock() }

@@ -75,7 +75,8 @@ public final class AppWindowObserver: @unchecked Sendable {
                 }
             }
         } else if attempt < 5 && AccessibilityHelper.isElementValid(element) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+            // Back off (30ms, 60ms, … ~1s in total) so slow apps still get their subrole set in time.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03 * Double(1 << attempt)) {
                 MainActor.assumeIsolated {
                     self.addCreatedWindow(element, attempt: attempt + 1)
                 }
@@ -98,6 +99,7 @@ public final class AppWindowObserver: @unchecked Sendable {
             }
         } else if notification == (kAXWindowMovedNotification as String) || notification == (kAXWindowResizedNotification as String) {
             MainActor.assumeIsolated {
+                TilingController.shared.windowFrameChanged(element: element)
                 if BorderController.shared.isTarget(element) {
                     BorderController.shared.refresh()
                 }

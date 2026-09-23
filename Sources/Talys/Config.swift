@@ -114,6 +114,8 @@ public struct BarConfig: Codable, Sendable {
     public var theme: String = "catppuccin_mocha"
     public var clock_format: String = "EEE MMM d  HH:mm"
     public var clock_format_alt: String = "HH:mm:ss"
+    /// Auto-hide the macOS menu bar while Talys runs; your own setting comes back on quit.
+    public var hide_macos_menu_bar: Bool = true
 
     public init(
         enabled: Bool = true,
@@ -123,7 +125,8 @@ public struct BarConfig: Codable, Sendable {
         gap: Double = 8.0,
         theme: String = "catppuccin_mocha",
         clock_format: String = "EEE MMM d  HH:mm",
-        clock_format_alt: String = "HH:mm:ss"
+        clock_format_alt: String = "HH:mm:ss",
+        hide_macos_menu_bar: Bool = true
     ) {
         self.enabled = enabled
         self.height = height
@@ -133,6 +136,7 @@ public struct BarConfig: Codable, Sendable {
         self.theme = theme
         self.clock_format = clock_format
         self.clock_format_alt = clock_format_alt
+        self.hide_macos_menu_bar = hide_macos_menu_bar
     }
 
     public init(from decoder: Decoder) throws {
@@ -146,6 +150,7 @@ public struct BarConfig: Codable, Sendable {
         theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? d.theme
         clock_format = try c.decodeIfPresent(String.self, forKey: .clock_format) ?? d.clock_format
         clock_format_alt = try c.decodeIfPresent(String.self, forKey: .clock_format_alt) ?? d.clock_format_alt
+        hide_macos_menu_bar = try c.decodeIfPresent(Bool.self, forKey: .hide_macos_menu_bar) ?? d.hide_macos_menu_bar
     }
 }
 
@@ -255,6 +260,7 @@ height = 34.0
 margin_top = 6.0
 margin_horizontal = 14.0
 gap = 8.0
+hide_macos_menu_bar = true  # Auto-hide the macOS menu bar while Talys runs; restored on quit
 
 [gaps]
 inner = 8.0
@@ -465,6 +471,44 @@ exec = "osascript -e 'tell application \\"Terminal\\" to do script \\"\\"' -e 't
     }
 
     /// Rewrites the `theme = "..."` line in config.toml so a theme picked at runtime survives restarts.
+    /// Writes `hide_macos_menu_bar` under [bar], adding the line (or the section) if missing.
+    public static func persistHideMenuBar(_ hide: Bool) {
+        let url = configURL
+        guard var text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        var lines = text.components(separatedBy: "\n")
+        let newLine = "hide_macos_menu_bar = \(hide)"
+
+        var section = ""
+        var barHeader: Int?
+        var existing: Int?
+        for (i, raw) in lines.enumerated() {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("[") {
+                section = line
+                if line == "[bar]" { barHeader = i }
+                continue
+            }
+            if section == "[bar]", line.hasPrefix("hide_macos_menu_bar") {
+                existing = i
+            }
+        }
+
+        if let i = existing {
+            lines[i] = newLine
+        } else if let i = barHeader {
+            lines.insert(newLine, at: i + 1)
+        } else {
+            lines += ["", "[bar]", newLine]
+        }
+
+        text = lines.joined(separator: "\n")
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            print("[Config] Could not persist hide_macos_menu_bar: \(error)")
+        }
+    }
+
     public static func persistTheme(_ name: String) {
         let url = configURL
         guard var text = try? String(contentsOf: url, encoding: .utf8) else { return }
