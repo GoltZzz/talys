@@ -4,11 +4,14 @@ public final class WindowAnimator: @unchecked Sendable {
     public static let shared = WindowAnimator()
 
     public var isEnabled: Bool = true
-    public var duration: TimeInterval = 0.18
+    public var duration: TimeInterval = 0.12
+    /// Called on the main queue once a window has been given its final frame.
+    public var onPlaced: ((AXUIElement, CGRect) -> Void)?
 
+    /// Only the position slides; resizing through AX makes the app relayout, which stutters every frame.
     private struct AnimatingWindow {
         let element: AXUIElement
-        let startFrame: CGRect
+        let startOrigin: CGPoint
         let targetFrame: CGRect
     }
 
@@ -29,7 +32,7 @@ public final class WindowAnimator: @unchecked Sendable {
 
         guard isEnabled && duration > 0.02 else {
             for item in frames {
-                AccessibilityHelper.setFrame(for: item.element, frame: item.targetFrame)
+                place(item.element, item.targetFrame)
             }
             return
         }
@@ -42,7 +45,7 @@ public final class WindowAnimator: @unchecked Sendable {
 
             // Never fly a window in from (or out to) the parking lot.
             if ParkingLot.isParked(start) || ParkingLot.isParked(target) {
-                AccessibilityHelper.setFrame(for: item.element, frame: target)
+                place(item.element, target)
                 continue
             }
 
@@ -52,13 +55,20 @@ public final class WindowAnimator: @unchecked Sendable {
             let dh = abs(start.size.height - target.size.height)
 
             if dx < 2 && dy < 2 && dw < 2 && dh < 2 {
-                AccessibilityHelper.setFrame(for: item.element, frame: target)
+                place(item.element, target)
                 continue
+            }
+
+            // Slide at the smaller of the two sizes on each axis, so a window never covers its neighbours
+            // mid-slide: shrinking windows shrink first, growing ones grow once they've arrived.
+            let slideSize = CGSize(width: min(start.width, target.width), height: min(start.height, target.height))
+            if abs(slideSize.width - start.width) >= 1 || abs(slideSize.height - start.height) >= 1 {
+                AccessibilityHelper.setSize(for: item.element, to: slideSize)
             }
 
             toAnimate.append(AnimatingWindow(
                 element: item.element,
-                startFrame: start,
+                startOrigin: start.origin,
                 targetFrame: target
             ))
         }
@@ -93,8 +103,11 @@ public final class WindowAnimator: @unchecked Sendable {
         lock.unlock()
 
         for item in items {
-            let current = isFinished ? item.targetFrame : interpolate(from: item.startFrame, to: item.targetFrame, t: t)
-            AccessibilityHelper.setFrame(for: item.element, frame: current)
+            if isFinished {
+                place(item.element, item.targetFrame)
+            } else {
+                AccessibilityHelper.setPosition(for: item.element, to: interpolate(from: item.startOrigin, to: item.targetFrame.origin, t: t))
+            }
         }
 
         // The timer runs on the main queue, so the border can follow the window each frame.
@@ -103,12 +116,13 @@ public final class WindowAnimator: @unchecked Sendable {
         }
     }
 
-    private func interpolate(from: CGRect, to: CGRect, t: Double) -> CGRect {
-        let x = from.origin.x + (to.origin.x - from.origin.x) * t
-        let y = from.origin.y + (to.origin.y - from.origin.y) * t
-        let w = from.size.width + (to.size.width - from.size.width) * t
-        let h = from.size.height + (to.size.height - from.size.height) * t
-        return CGRect(x: x, y: y, width: w, height: h)
+    private func place(_ element: AXUIElement, _ frame: CGRect) {
+        AccessibilityHelper.setFrame(for: element, frame: frame)
+        onPlaced?(element, frame)
+    }
+
+    private func interpolate(from: CGPoint, to: CGPoint, t: Double) -> CGPoint {
+        CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
     }
 
     /// True while `element` is mid-animation, so its in-between frames aren't mistaken for an app moving it.

@@ -17,6 +17,9 @@ public enum KeyAction: Sendable, CustomStringConvertible {
     case toggleScratchpad
     case moveToScratchpad
     case cycleTheme
+    case toggleAnimations
+    case cycleColumnWidth
+    case consumeOrExpel(UInt8)
 
     public var description: String {
         switch self {
@@ -35,6 +38,9 @@ public enum KeyAction: Sendable, CustomStringConvertible {
         case .toggleScratchpad: return "toggleScratchpad"
         case .moveToScratchpad: return "moveToScratchpad"
         case .cycleTheme: return "cycleTheme"
+        case .toggleAnimations: return "toggleAnimations"
+        case .cycleColumnWidth: return "cycleColumnWidth"
+        case .consumeOrExpel(let d): return "consumeOrExpel(\(d))"
         }
     }
 }

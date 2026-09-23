@@ -1,7 +1,10 @@
 const std = @import("std");
 const geometry = @import("geometry.zig");
+const constraints = @import("constraints.zig");
+const scroll = @import("scroll.zig");
 const Rect = geometry.Rect;
 const GapConfig = geometry.GapConfig;
+const MinSizes = constraints.MinSizes;
 
 pub const WindowId = u32;
 pub const NodeIndex = u16;
@@ -16,15 +19,11 @@ pub const Direction = enum(u8) {
     right = 3,
 };
 
-pub const SplitDirection = enum(u8) {
-    horizontal = 0,
-    vertical = 1,
-};
-
 pub const LayoutMode = enum(u8) {
     dwindle = 0,
     master_stack = 1,
     monocle = 2,
+    scrolling = 3,
 };
 
 pub const NodeData = union(enum) {
@@ -32,8 +31,9 @@ pub const NodeData = union(enum) {
     leaf: struct {
         window_id: WindowId,
     },
+    /// Split direction isn't stored: each branch splits along the longer side of the rect it gets,
+    /// so tiles stay close to square however the tree was built.
     branch: struct {
-        split_dir: SplitDirection,
         ratio: f64,
         left: NodeIndex,
         right: NodeIndex,
@@ -58,6 +58,10 @@ pub const BspEngine = struct {
     floating_windows: [MAX_WINDOWS]WindowId = undefined,
     floating_count: usize = 0,
 
+    /// Column arrangement for the scrolling layout, kept in sync with the tree so either layout can be
+    /// switched to without losing the other's arrangement.
+    strip: scroll.ScrollStrip = .{},
+
     pub fn init() BspEngine {
         var engine = BspEngine{};
         engine.reset();
@@ -70,6 +74,7 @@ pub const BspEngine = struct {
         self.layout_mode = .dwindle;
         self.fullscreen = false;
         self.floating_count = 0;
+        self.strip.reset();
 
         self.free_count = MAX_NODES;
         for (0..MAX_NODES) |i| {
@@ -171,6 +176,10 @@ pub const BspEngine = struct {
     pub fn addWindow(self: *BspEngine, wid: WindowId) void {
         if (self.hasWindow(wid)) return;
 
+        // New columns open right after the focused one.
+        const anchor: ?usize = if (self.focused_window) |f| (if (self.strip.find(f)) |p| p.col else null) else null;
+        self.strip.insertColumn(if (anchor) |a| a + 1 else self.strip.count, wid);
+
         if (self.root == null_node) {
             const leaf_idx = self.allocNode() orelse return;
             self.nodes[leaf_idx].data = .{ .leaf = .{ .window_id = wid } };
@@ -196,20 +205,12 @@ pub const BspEngine = struct {
         };
 
         const parent_idx = self.nodes[target_leaf].parent;
-        var split_dir: SplitDirection = .horizontal;
-        if (parent_idx != null_node) {
-            if (self.nodes[parent_idx].data == .branch) {
-                const p_dir = self.nodes[parent_idx].data.branch.split_dir;
-                split_dir = if (p_dir == .horizontal) .vertical else .horizontal;
-            }
-        }
 
         self.nodes[new_leaf_idx].data = .{ .leaf = .{ .window_id = wid } };
         self.nodes[new_leaf_idx].parent = branch_idx;
 
         self.nodes[branch_idx].data = .{
             .branch = .{
-                .split_dir = split_dir,
                 .ratio = 0.5,
                 .left = target_leaf,
                 .right = new_leaf_idx,
@@ -257,6 +258,12 @@ pub const BspEngine = struct {
         const leaf_idx = self.findLeafByWindow(wid);
         if (leaf_idx == null_node) return;
 
+        const strip_successor = if (self.layout_mode == .scrolling and self.focused_window == wid) self.strip.successor(wid) else null;
+        self.strip.remove(wid);
+        defer if (strip_successor) |next| {
+            if (self.focused_window != null and self.hasWindow(next)) self.focused_window = next;
+        };
+
         if (leaf_idx == self.root) {
             self.freeNode(leaf_idx);
             self.root = null_node;
@@ -295,6 +302,7 @@ pub const BspEngine = struct {
     pub fn setFocus(self: *BspEngine, wid: WindowId) void {
         if (self.hasWindow(wid)) {
             self.focused_window = wid;
+            self.strip.markActive(wid);
         }
     }
 
@@ -330,13 +338,18 @@ pub const BspEngine = struct {
     pub fn cycleLayout(self: *BspEngine) void {
         self.layout_mode = switch (self.layout_mode) {
             .dwindle => .master_stack,
-            .master_stack => .monocle,
+            .master_stack => .scrolling,
+            .scrolling => .monocle,
             .monocle => .dwindle,
         };
     }
 
     pub fn resizeFocused(self: *BspEngine, delta: f64) void {
         const wid = self.focused_window orelse return;
+        if (self.layout_mode == .scrolling) {
+            self.strip.resize(wid, delta);
+            return;
+        }
         const leaf_idx = self.findLeafByWindow(wid);
         if (leaf_idx == null_node) return;
 
@@ -352,9 +365,10 @@ pub const BspEngine = struct {
     }
 
     pub fn calculateLayout(
-        self: *const BspEngine,
+        self: *BspEngine,
         screen_rect: Rect,
         gaps: GapConfig,
+        mins: *const MinSizes,
         max_count: usize,
         out_ids: [*]WindowId,
         out_rects: [*]Rect,
@@ -373,7 +387,7 @@ pub const BspEngine = struct {
                 if (self.root == null_node) return 0;
                 const usable_rect = screen_rect.insetUniform(gaps.outer);
                 var count: usize = 0;
-                self.renderNode(self.root, usable_rect, gaps.inner, max_count, out_ids, out_rects, &count);
+                self.renderNode(self.root, usable_rect, gaps.inner, mins, max_count, out_ids, out_rects, &count);
                 return count;
             },
             .master_stack => {
@@ -391,8 +405,20 @@ pub const BspEngine = struct {
 
                 const limit = @min(total, max_count);
                 const inner = gaps.inner;
-                const master_w = @max(0.0, (usable_rect.width - inner) * 0.5);
-                const stack_w = @max(0.0, usable_rect.width - inner - master_w);
+                const stack_count = limit - 1;
+
+                // Master gets half, unless either side needs more to fit its windows' minimum widths.
+                var stack_min_w: f64 = 0;
+                var stack_min_hs: [MAX_WINDOWS]f64 = undefined;
+                for (1..limit) |i| {
+                    const m = mins.get(windows[i]);
+                    stack_min_w = @max(stack_min_w, m.width);
+                    stack_min_hs[i - 1] = m.height;
+                }
+                var widths: [2]f64 = undefined;
+                _ = constraints.distribute(usable_rect.width, inner, &.{ mins.get(windows[0]).width, stack_min_w }, &widths);
+                const master_w = widths[0];
+                const stack_w = widths[1];
 
                 out_ids[0] = windows[0];
                 out_rects[0] = Rect{
@@ -402,10 +428,8 @@ pub const BspEngine = struct {
                     .height = usable_rect.height,
                 };
 
-                const stack_count = limit - 1;
-                const stack_inner_total = inner * @as(f64, @floatFromInt(stack_count - 1));
-                const total_stack_h = @max(0.0, usable_rect.height - stack_inner_total);
-                const stack_h = total_stack_h / @as(f64, @floatFromInt(stack_count));
+                var stack_hs: [MAX_WINDOWS]f64 = undefined;
+                _ = constraints.distribute(usable_rect.height, inner, stack_min_hs[0..stack_count], stack_hs[0..stack_count]);
 
                 var curr_y = usable_rect.y;
                 for (1..limit) |i| {
@@ -414,12 +438,13 @@ pub const BspEngine = struct {
                         .x = usable_rect.x + master_w + inner,
                         .y = curr_y,
                         .width = stack_w,
-                        .height = stack_h,
+                        .height = stack_hs[i - 1],
                     };
-                    curr_y += stack_h + inner;
+                    curr_y += stack_hs[i - 1] + inner;
                 }
                 return limit;
             },
+            .scrolling => return self.strip.layout(screen_rect, gaps, mins, self.focused_window, max_count, out_ids, out_rects),
             .monocle => unreachable,
         }
     }
@@ -450,11 +475,65 @@ pub const BspEngine = struct {
         }
     }
 
+    /// Cuts `rect` in two along its width (`side_by_side`) or height, the first part `first` long.
+    fn splitRect(rect: Rect, side_by_side: bool, gap: f64, first: f64) [2]Rect {
+        if (side_by_side) {
+            const total = @max(0.0, rect.width - gap);
+            return .{
+                .{ .x = rect.x, .y = rect.y, .width = first, .height = rect.height },
+                .{ .x = rect.x + first + gap, .y = rect.y, .width = @max(0.0, total - first), .height = rect.height },
+            };
+        }
+        const total = @max(0.0, rect.height - gap);
+        return .{
+            .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = first },
+            .{ .x = rect.x, .y = rect.y + first + gap, .width = rect.width, .height = @max(0.0, total - first) },
+        };
+    }
+
+    /// Smallest width (`along_width`) or height the subtree can be squeezed into, laid out as it would be in `rect`.
+    fn minExtent(self: *const BspEngine, node_idx: NodeIndex, rect: Rect, gap: f64, mins: *const MinSizes, along_width: bool) f64 {
+        if (node_idx == null_node) return 0;
+        switch (self.nodes[node_idx].data) {
+            .leaf => |leaf| {
+                const m = mins.get(leaf.window_id);
+                return if (along_width) m.width else m.height;
+            },
+            .branch => |branch| {
+                const side_by_side = rect.width >= rect.height;
+                const total = if (side_by_side) rect.width - gap else rect.height - gap;
+                const parts = splitRect(rect, side_by_side, gap, @round(@max(0.0, total) * branch.ratio));
+                const a = self.minExtent(branch.left, parts[0], gap, mins, along_width);
+                const b = self.minExtent(branch.right, parts[1], gap, mins, along_width);
+                return if (side_by_side == along_width) a + gap + b else @max(a, b);
+            },
+            .empty => return 0,
+        }
+    }
+
+    /// Splits a branch's rect so both halves fit their windows' minimum sizes, moving the divider and, if that
+    /// isn't enough, flipping the split direction. Returns null when neither direction fits.
+    fn fitSplit(self: *const BspEngine, branch_left: NodeIndex, branch_right: NodeIndex, ratio: f64, rect: Rect, gap: f64, mins: *const MinSizes, side_by_side: bool) ?[2]Rect {
+        const total = @max(0.0, if (side_by_side) rect.width - gap else rect.height - gap);
+        const cross = if (side_by_side) rect.height else rect.width;
+        const nominal = splitRect(rect, side_by_side, gap, @round(total * ratio));
+
+        const need_a = self.minExtent(branch_left, nominal[0], gap, mins, side_by_side);
+        const need_b = self.minExtent(branch_right, nominal[1], gap, mins, side_by_side);
+        const cross_a = self.minExtent(branch_left, nominal[0], gap, mins, !side_by_side);
+        const cross_b = self.minExtent(branch_right, nominal[1], gap, mins, !side_by_side);
+        if (need_a + need_b > total + 0.5 or @max(cross_a, cross_b) > cross + 0.5) return null;
+
+        const first = std.math.clamp(@round(total * ratio), need_a, total - need_b);
+        return splitRect(rect, side_by_side, gap, first);
+    }
+
     fn renderNode(
         self: *const BspEngine,
         node_idx: NodeIndex,
         rect: Rect,
         inner_gap: f64,
+        mins: *const MinSizes,
         max_count: usize,
         out_ids: [*]WindowId,
         out_rects: [*]Rect,
@@ -470,66 +549,36 @@ pub const BspEngine = struct {
                 count.* += 1;
             },
             .branch => |branch| {
-                switch (branch.split_dir) {
-                    .horizontal => {
-                        const total_w = @max(0.0, rect.width - inner_gap);
-                        const left_w = @round(total_w * branch.ratio);
-                        const right_w = @max(0.0, total_w - left_w);
+                // Split along the longer side so tiles stay close to square, unless only the other way fits.
+                const preferred = rect.width >= rect.height;
+                const parts = self.fitSplit(branch.left, branch.right, branch.ratio, rect, inner_gap, mins, preferred) orelse
+                    self.fitSplit(branch.left, branch.right, branch.ratio, rect, inner_gap, mins, !preferred) orelse
+                    splitRect(rect, preferred, inner_gap, @round(@max(0.0, if (preferred) rect.width - inner_gap else rect.height - inner_gap) * branch.ratio));
 
-                        const left_rect = Rect{
-                            .x = rect.x,
-                            .y = rect.y,
-                            .width = left_w,
-                            .height = rect.height,
-                        };
-                        const right_rect = Rect{
-                            .x = rect.x + left_w + inner_gap,
-                            .y = rect.y,
-                            .width = right_w,
-                            .height = rect.height,
-                        };
-
-                        self.renderNode(branch.left, left_rect, inner_gap, max_count, out_ids, out_rects, count);
-                        self.renderNode(branch.right, right_rect, inner_gap, max_count, out_ids, out_rects, count);
-                    },
-                    .vertical => {
-                        const total_h = @max(0.0, rect.height - inner_gap);
-                        const top_h = @round(total_h * branch.ratio);
-                        const bottom_h = @max(0.0, total_h - top_h);
-
-                        const top_rect = Rect{
-                            .x = rect.x,
-                            .y = rect.y,
-                            .width = rect.width,
-                            .height = top_h,
-                        };
-                        const bottom_rect = Rect{
-                            .x = rect.x,
-                            .y = rect.y + top_h + inner_gap,
-                            .width = rect.width,
-                            .height = bottom_h,
-                        };
-
-                        self.renderNode(branch.left, top_rect, inner_gap, max_count, out_ids, out_rects, count);
-                        self.renderNode(branch.right, bottom_rect, inner_gap, max_count, out_ids, out_rects, count);
-                    },
-                }
+                self.renderNode(branch.left, parts[0], inner_gap, mins, max_count, out_ids, out_rects, count);
+                self.renderNode(branch.right, parts[1], inner_gap, mins, max_count, out_ids, out_rects, count);
             },
             .empty => {},
         }
     }
 
     pub fn findNeighbor(
-        self: *const BspEngine,
+        self: *BspEngine,
         dir: Direction,
         screen_rect: Rect,
         gaps: GapConfig,
+        mins: *const MinSizes,
     ) ?WindowId {
         const focused = self.focused_window orelse return null;
 
+        if (self.layout_mode == .scrolling and !self.fullscreen) {
+            const d = stripDelta(dir);
+            return self.strip.neighbor(focused, d[0], d[1]);
+        }
+
         var ids: [MAX_WINDOWS]WindowId = undefined;
         var rects: [MAX_WINDOWS]Rect = undefined;
-        const count = self.calculateLayout(screen_rect, gaps, MAX_WINDOWS, &ids, &rects);
+        const count = self.calculateLayout(screen_rect, gaps, mins, MAX_WINDOWS, &ids, &rects);
         if (count <= 1) return null;
 
         var focused_rect: ?Rect = null;
@@ -600,14 +649,24 @@ pub const BspEngine = struct {
         return best_id;
     }
 
+    fn stripDelta(dir: Direction) [2]i8 {
+        return switch (dir) {
+            .left => .{ -1, 0 },
+            .right => .{ 1, 0 },
+            .up => .{ 0, -1 },
+            .down => .{ 0, 1 },
+        };
+    }
+
     pub fn focusDirection(
         self: *BspEngine,
         dir: Direction,
         screen_rect: Rect,
         gaps: GapConfig,
+        mins: *const MinSizes,
     ) ?WindowId {
-        if (self.findNeighbor(dir, screen_rect, gaps)) |target_wid| {
-            self.focused_window = target_wid;
+        if (self.findNeighbor(dir, screen_rect, gaps, mins)) |target_wid| {
+            self.setFocus(target_wid);
             return target_wid;
         }
         return null;
@@ -618,9 +677,16 @@ pub const BspEngine = struct {
         dir: Direction,
         screen_rect: Rect,
         gaps: GapConfig,
+        mins: *const MinSizes,
     ) bool {
         const focused = self.focused_window orelse return false;
-        const target_wid = self.findNeighbor(dir, screen_rect, gaps) orelse return false;
+
+        if (self.layout_mode == .scrolling) {
+            const d = stripDelta(dir);
+            return self.strip.move(focused, d[0], d[1]);
+        }
+
+        const target_wid = self.findNeighbor(dir, screen_rect, gaps, mins) orelse return false;
 
         const leaf1 = self.findLeafByWindow(focused);
         const leaf2 = self.findLeafByWindow(target_wid);
@@ -631,6 +697,20 @@ pub const BspEngine = struct {
 
         self.focused_window = focused;
         return true;
+    }
+
+    /// Scrolling layout: steps the focused column through the preset widths.
+    pub fn cycleColumnWidth(self: *BspEngine) void {
+        const wid = self.focused_window orelse return;
+        self.strip.cycleWidth(wid);
+    }
+
+    /// Scrolling layout: stacks the focused window into the column on that side, or pulls it out into its own.
+    pub fn consumeOrExpel(self: *BspEngine, dir: Direction) bool {
+        const wid = self.focused_window orelse return false;
+        const d = stripDelta(dir);
+        if (d[0] == 0) return false;
+        return self.strip.consumeOrExpel(wid, d[0]);
     }
 };
 
@@ -652,6 +732,7 @@ test "BspEngine basic add, remove, focus" {
     const count = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 10 },
+        &MinSizes.empty,
         10,
         &ids,
         &rects,
@@ -664,11 +745,39 @@ test "BspEngine basic add, remove, focus" {
     const count2 = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 10 },
+        &MinSizes.empty,
         10,
         &ids,
         &rects,
     );
     try std.testing.expectEqual(@as(usize, 2), count2);
+}
+
+test "BspEngine splits follow tile shape after removals" {
+    var engine = BspEngine.init();
+    engine.addWindow(1);
+    engine.addWindow(2); // 1 | 2
+    engine.addWindow(3); // 1 | (2 / 3)
+    engine.setFocus(1);
+    engine.addWindow(4); // (1 / 4) | (2 / 3)
+    engine.removeWindow(2); // (1 / 4) | 3
+
+    var ids: [10]WindowId = undefined;
+    var rects: [10]Rect = undefined;
+    const count = engine.calculateLayout(
+        .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
+        .{ .inner = 10, .outer = 0 },
+        &MinSizes.empty,
+        10,
+        &ids,
+        &rects,
+    );
+    try std.testing.expectEqual(@as(usize, 3), count);
+    // The left half is tall, so 1 and 4 stack instead of becoming thin columns.
+    try std.testing.expectEqual(@as(WindowId, 1), ids[0]);
+    try std.testing.expectEqual(@as(WindowId, 4), ids[1]);
+    try std.testing.expectEqual(rects[0].x, rects[1].x);
+    try std.testing.expect(rects[1].y > rects[0].y);
 }
 
 test "BspEngine focus and swap directional" {
@@ -679,14 +788,14 @@ test "BspEngine focus and swap directional" {
     const screen = Rect{ .x = 0, .y = 0, .width = 1000, .height = 500 };
     const gaps = GapConfig{ .inner = 10, .outer = 10 };
 
-    const left_wid = engine.focusDirection(.left, screen, gaps);
+    const left_wid = engine.focusDirection(.left, screen, gaps, &MinSizes.empty);
     try std.testing.expectEqual(@as(?WindowId, 1), left_wid);
     try std.testing.expectEqual(@as(?WindowId, 1), engine.getFocus());
 
-    const right_wid = engine.focusDirection(.right, screen, gaps);
+    const right_wid = engine.focusDirection(.right, screen, gaps, &MinSizes.empty);
     try std.testing.expectEqual(@as(?WindowId, 2), right_wid);
 
-    const swapped = engine.swapDirection(.left, screen, gaps);
+    const swapped = engine.swapDirection(.left, screen, gaps, &MinSizes.empty);
     try std.testing.expect(swapped);
 }
 
@@ -705,6 +814,7 @@ test "BspEngine floating and fullscreen" {
     const count = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 10 },
+        &MinSizes.empty,
         10,
         &ids,
         &rects,
@@ -722,9 +832,67 @@ test "BspEngine floating and fullscreen" {
     const count_fs = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 10 },
+        &MinSizes.empty,
         10,
         &ids,
         &rects,
     );
     try std.testing.expectEqual(@as(usize, 1), count_fs);
+}
+
+test "BspEngine dwindle moves the divider for minimum widths" {
+    var engine = BspEngine.init();
+    engine.addWindow(1);
+    engine.addWindow(2);
+    var mins = MinSizes{};
+    mins.set(1, .{ .width = 700 });
+
+    var ids: [10]WindowId = undefined;
+    var rects: [10]Rect = undefined;
+    _ = engine.calculateLayout(.{ .x = 0, .y = 0, .width = 1000, .height = 500 }, .{ .inner = 10, .outer = 0 }, &mins, 10, &ids, &rects);
+    try std.testing.expectEqual(@as(f64, 700), rects[0].width);
+    try std.testing.expectEqual(@as(f64, 290), rects[1].width);
+}
+
+test "BspEngine dwindle stacks when side by side can't fit" {
+    var engine = BspEngine.init();
+    engine.addWindow(1);
+    engine.addWindow(2);
+    var mins = MinSizes{};
+    mins.set(1, .{ .width = 600 });
+    mins.set(2, .{ .width = 600 });
+
+    var ids: [10]WindowId = undefined;
+    var rects: [10]Rect = undefined;
+    _ = engine.calculateLayout(.{ .x = 0, .y = 0, .width = 1000, .height = 500 }, .{ .inner = 10, .outer = 0 }, &mins, 10, &ids, &rects);
+    try std.testing.expectEqual(rects[0].x, rects[1].x);
+    try std.testing.expectEqual(@as(f64, 1000), rects[0].width);
+    try std.testing.expect(rects[1].y > rects[0].y);
+}
+
+test "BspEngine scrolling layout navigation" {
+    var engine = BspEngine.init();
+    engine.layout_mode = .scrolling;
+    engine.addWindow(1);
+    engine.addWindow(2);
+    engine.addWindow(3); // columns: 1 2 3, focus 3
+    const screen = Rect{ .x = 0, .y = 0, .width = 1000, .height = 500 };
+    const gaps = GapConfig{ .inner = 0, .outer = 0 };
+
+    try std.testing.expectEqual(@as(?WindowId, 2), engine.focusDirection(.left, screen, gaps, &MinSizes.empty));
+    try std.testing.expect(engine.consumeOrExpel(.left)); // columns: (1 / 2) 3
+    try std.testing.expectEqual(@as(usize, 2), engine.strip.count);
+    try std.testing.expectEqual(@as(?WindowId, 1), engine.focusDirection(.up, screen, gaps, &MinSizes.empty));
+    try std.testing.expectEqual(@as(?WindowId, 3), engine.focusDirection(.right, screen, gaps, &MinSizes.empty));
+    // Coming back to the stacked column lands on the window focused there last.
+    try std.testing.expectEqual(@as(?WindowId, 1), engine.focusDirection(.left, screen, gaps, &MinSizes.empty));
+
+    engine.removeWindow(1);
+    try std.testing.expectEqual(@as(?WindowId, 2), engine.getFocus());
+
+    var ids: [10]WindowId = undefined;
+    var rects: [10]Rect = undefined;
+    const count = engine.calculateLayout(screen, gaps, &MinSizes.empty, 10, &ids, &rects);
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expectEqual(@as(f64, 500), rects[0].height); // back to a lone window, full height
 }

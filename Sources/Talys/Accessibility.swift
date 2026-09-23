@@ -155,6 +155,13 @@ public enum AccessibilityHelper {
         return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posVal) == .success
     }
 
+    @discardableResult
+    public static func setSize(for element: AXUIElement, to size: CGSize) -> Bool {
+        var size = size
+        guard let sizeVal = AXValueCreate(.cgSize, &size) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeVal) == .success
+    }
+
     public static func focusWindow(element: AXUIElement, pid: pid_t) {
         if let app = NSRunningApplication(processIdentifier: pid) {
             app.activate()

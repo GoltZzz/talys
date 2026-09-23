@@ -10,7 +10,7 @@ public final class TalysDesktopState {
     // MARK: - Window Manager State
     public var activeWorkspace: UInt8 = 1
     public var occupiedWorkspaces: Set<UInt8> = [1]
-    public var layoutMode: String = "Dwindle" // Dwindle, Master-Stack, Monocle
+    public var layoutMode: String = "Dwindle" // Dwindle, Master-Stack, Scrolling, Monocle
     public var activeWindowTitle: String = "Desktop"
     public var activeAppIcon: NSImage? = nil
     public var isTilingEnabled: Bool = true
@@ -51,6 +51,7 @@ public final class TalysDesktopState {
         self.layoutMode = switch mode {
         case UInt8(TALYS_LAYOUT_MASTER_STACK): "Master-Stack"
         case UInt8(TALYS_LAYOUT_MONOCLE): "Monocle"
+        case UInt8(TALYS_LAYOUT_SCROLLING): "Scrolling"
         default: "Dwindle"
         }
     }

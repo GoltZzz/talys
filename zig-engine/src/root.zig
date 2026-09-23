@@ -15,4 +15,6 @@ test {
     _ = @import("bsp.zig");
     _ = @import("tiling.zig");
     _ = @import("workspace.zig");
+    _ = @import("constraints.zig");
+    _ = @import("scroll.zig");
 }

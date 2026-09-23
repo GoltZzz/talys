@@ -66,9 +66,9 @@ public struct ExecBind: Codable, Sendable {
 
 public struct AnimationsConfig: Codable, Sendable {
     public var enabled: Bool = true
-    public var duration_ms: Double = 180.0
+    public var duration_ms: Double = 120.0
 
-    public init(enabled: Bool = true, duration_ms: Double = 180.0) {
+    public init(enabled: Bool = true, duration_ms: Double = 120.0) {
         self.enabled = enabled
         self.duration_ms = duration_ms
     }
@@ -209,6 +209,10 @@ public enum ConfigManager {
             "toggle_scratchpad": "mod+s",
             "move_to_scratchpad": "mod+shift+s",
             "cycle_theme": "mod+shift+t",
+            "toggle_animations": "mod+shift+a",
+            "cycle_column_width": "mod+w",
+            "stack_left": "mod+comma",
+            "stack_right": "mod+period",
         ]
         for ws in 1...9 {
             map["switch_workspace_\(ws)"] = "mod+\(ws)"
@@ -238,6 +242,10 @@ public enum ConfigManager {
             "toggle_scratchpad": .toggleScratchpad,
             "move_to_scratchpad": .moveToScratchpad,
             "cycle_theme": .cycleTheme,
+            "toggle_animations": .toggleAnimations,
+            "cycle_column_width": .cycleColumnWidth,
+            "stack_left": .consumeOrExpel(0),
+            "stack_right": .consumeOrExpel(3),
         ]
         for ws in 1...9 {
             map["switch_workspace_\(ws)"] = .switchWorkspace(UInt8(ws))
@@ -250,7 +258,7 @@ public enum ConfigManager {
 # Talys Configuration (~/.config/talys/config.toml)
 
 [general]
-layout = "dwindle"          # "dwindle", "master_stack", "monocle"
+layout = "dwindle"          # "dwindle", "master_stack", "scrolling", "monocle"
 mod = "alt"                 # Modifier used by "mod+..." binds: "alt", "cmd", "ctrl", "hyper", or combos like "ctrl+alt"
 theme = "catppuccin_mocha"  # catppuccin_mocha, tokyo_night, gruvbox, rose_pine, nord, or ~/.config/talys/themes/<name>.toml
 
@@ -273,8 +281,8 @@ radius = 12.0
 gradient = true
 
 [animations]
-enabled = true
-duration_ms = 180.0
+enabled = true              # Toggle at runtime with toggle_animations (mod+shift+a)
+duration_ms = 120.0
 
 # Any action left out here keeps its default bind.
 [keybindings]
@@ -302,6 +310,12 @@ cycle_layout = "mod+tab"
 toggle_scratchpad = "mod+s"
 move_to_scratchpad = "mod+shift+s"
 cycle_theme = "mod+shift+t"
+toggle_animations = "mod+shift+a"
+
+# Scrolling layout: columns scroll sideways instead of shrinking; focus_*/swap_* move between columns.
+cycle_column_width = "mod+w"   # 1/3 → 1/2 → 2/3 of the screen
+stack_left = "mod+comma"       # Stack into the left column, or pull out of a shared one
+stack_right = "mod+period"
 
 switch_workspace_1 = "mod+1"
 switch_workspace_2 = "mod+2"
@@ -385,6 +399,8 @@ exec = "osascript -e 'tell application \\"Terminal\\" to do script \\"\\"' -e 't
             talys_engine_set_layout_mode(UInt8(TALYS_LAYOUT_MASTER_STACK))
         case "monocle":
             talys_engine_set_layout_mode(UInt8(TALYS_LAYOUT_MONOCLE))
+        case "scrolling", "scroll":
+            talys_engine_set_layout_mode(UInt8(TALYS_LAYOUT_SCROLLING))
         default:
             talys_engine_set_layout_mode(UInt8(TALYS_LAYOUT_DWINDLE))
         }

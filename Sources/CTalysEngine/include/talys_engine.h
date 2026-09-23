@@ -31,6 +31,7 @@ typedef uint32_t TalysWindowId;
 #define TALYS_LAYOUT_DWINDLE      0
 #define TALYS_LAYOUT_MASTER_STACK 1
 #define TALYS_LAYOUT_MONOCLE      2
+#define TALYS_LAYOUT_SCROLLING    3
 
 void talys_engine_init(void);
 void talys_engine_reset(void);
@@ -40,6 +41,7 @@ void talys_engine_set_gaps(double inner, double outer);
 void talys_engine_add_window(TalysWindowId wid);
 void talys_engine_remove_window(TalysWindowId wid);
 bool talys_engine_has_window(TalysWindowId wid);
+void talys_engine_set_min_size(TalysWindowId wid, double width, double height);
 
 void talys_engine_set_focus(TalysWindowId wid);
 TalysWindowId talys_engine_get_focus(void);
@@ -55,6 +57,9 @@ bool talys_engine_is_fullscreen(void);
 void talys_engine_cycle_layout(void);
 uint8_t talys_engine_get_layout_mode(void);
 void talys_engine_set_layout_mode(uint8_t mode);
+
+void talys_engine_cycle_column_width(void);
+bool talys_engine_consume_or_expel(uint8_t direction);
 
 int talys_engine_calculate_layout(
     TalysRect screen_rect,

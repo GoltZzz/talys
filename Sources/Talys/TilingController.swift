@@ -38,6 +38,16 @@ public final class TilingController {
     private static let settleDuration: TimeInterval = 1.0
     /// Workspace we last switched away from, for back-and-forth.
     private var previousWorkspace: UInt8?
+    /// Smallest size each window's app has accepted, learned the first time it refused a smaller tile.
+    /// There's no API to override an app's minimum, so layouts size tiles around it instead.
+    private var minSizes: [TalysWindowId: CGSize] = [:]
+    private var relayoutPending = false
+    /// Scrolling layout: windows whose column is out of view. They wait in the parking lot like hidden workspaces.
+    private var scrolledOff: Set<TalysWindowId> = []
+    /// Windows sliding out of view, parked once they get there.
+    private var parkOnArrival: Set<TalysWindowId> = []
+    /// Less than this much of a column on screen isn't worth showing; it's parked instead.
+    private static let minVisibleWidth: CGFloat = 40
 
     public var onWorkspaceChanged: ((UInt8) -> Void)?
     public var barConfig: BarConfig = BarConfig()
@@ -66,6 +76,9 @@ public final class TilingController {
     public init() {
         talys_engine_init()
         startHealthCheckTimer()
+        WindowAnimator.shared.onPlaced = { element, frame in
+            MainActor.assumeIsolated { TilingController.shared.windowPlaced(element: element, target: frame) }
+        }
         TalysDesktopState.shared.activeWorkspace = talys_engine_get_active_workspace()
         TalysDesktopState.shared.updateLayoutModeFromEngine()
         TalysDesktopState.shared.updateOccupiedWorkspaces()
@@ -108,18 +121,20 @@ public final class TilingController {
         let visible = screen.visibleFrame
 
         let axX = visible.origin.x
-        var axY = primaryHeight - visible.origin.y - visible.size.height
         let axW = visible.size.width
-        var axH = visible.size.height
+        var axY = primaryHeight - visible.maxY
+        let axBottom = primaryHeight - visible.minY
 
+        // The bar hangs from the screen's real top edge (not the visible frame's), and the engine insets
+        // this rect by the outer gap. Back that out so windows sit exactly `bar.gap` below the bar.
         let cfg = barConfig ?? TilingController.shared.barConfig
         if cfg.enabled {
-            let reservedTop = cfg.margin_top + cfg.height + cfg.gap
-            axY += reservedTop
-            axH -= reservedTop
+            let screenTop = primaryHeight - screen.frame.maxY
+            let barBottom = screenTop + cfg.margin_top + cfg.height
+            axY = barBottom + cfg.gap - TilingController.shared.outerGap
         }
 
-        return TalysRect(x: axX, y: axY, width: axW, height: axH)
+        return TalysRect(x: axX, y: axY, width: axW, height: max(0, axBottom - axY))
     }
 
     public func setWindowRules(_ rules: [WindowRule]) {
@@ -129,6 +144,15 @@ public final class TilingController {
     public func setAnimations(enabled: Bool, durationMs: Double) {
         WindowAnimator.shared.isEnabled = enabled
         WindowAnimator.shared.duration = max(0.01, durationMs / 1000.0)
+    }
+
+    /// Runtime switch; the config's `[animations] enabled` sets it again on the next reload.
+    public func toggleAnimations() {
+        WindowAnimator.shared.stop()
+        WindowAnimator.shared.isEnabled.toggle()
+        // A cut-off slide leaves windows between tiles; put them where they belong.
+        applyLayout()
+        print("[TilingController] Animations \(WindowAnimator.shared.isEnabled ? "on" : "off")")
     }
 
     public func syncCurrentFocus() {
@@ -155,6 +179,7 @@ public final class TilingController {
         lock.unlock()
         scratchpad.removeAll { staleIds.contains($0) }
         parked.subtract(staleIds)
+        forget(staleIds)
         updateScratchpadState()
 
         for wid in staleIds {
@@ -256,6 +281,7 @@ public final class TilingController {
             lock.unlock()
             BorderController.shared.clearTarget(ifMatching: element)
             if parked.remove(wid) != nil { refreshCurtain() }
+            forget([wid])
             if isScratchpad(wid) {
                 scratchpad.removeAll { $0 == wid }
                 updateScratchpadState()
@@ -286,6 +312,7 @@ public final class TilingController {
         lock.unlock()
         scratchpad.removeAll { toRemove.contains($0) }
         parked.subtract(toRemove)
+        forget(toRemove)
         refreshCurtain()
         updateScratchpadState()
 
@@ -305,12 +332,18 @@ public final class TilingController {
             return
         }
         guard !isAwayFromHome else { return }
-        // Stray focus events from windows we just parked must not steal the border, title, or the
-        // workspace's remembered focus.
-        guard !parked.contains(record.id) else { return }
+        if parked.contains(record.id) {
+            // Stray focus events from windows we just parked must not steal the border, title, or the
+            // workspace's remembered focus. A scrolled-off window that really has focus (Cmd+Tab, the Dock)
+            // is scrolled into view instead.
+            guard scrolledOff.contains(record.id),
+                  let front = AccessibilityHelper.getFocusedWindow(), CFEqual(front.element, element) else { return }
+        }
         BorderController.shared.setTarget(record.element)
         if !isScratchpad(record.id) {
+            let scrolls = isScrolling && talys_engine_get_focus() != record.id
             talys_engine_set_focus(record.id)
+            if scrolls { applyLayout() }
         }
         showActiveWindowInfo(record)
     }
@@ -340,6 +373,7 @@ public final class TilingController {
 
             if let record = record {
                 print("[TilingController] Focusing direction \(direction) -> window [ID \(targetWid)] \"\(record.title)\"")
+                if isScrolling { applyLayout() }
                 AccessibilityHelper.focusWindow(element: record.element, pid: record.pid)
             }
         }
@@ -416,10 +450,32 @@ public final class TilingController {
         case TALYS_LAYOUT_DWINDLE: "Dwindle"
         case TALYS_LAYOUT_MASTER_STACK: "Master-Stack"
         case TALYS_LAYOUT_MONOCLE: "Monocle"
+        case TALYS_LAYOUT_SCROLLING: "Scrolling"
         default: "Unknown"
         }
         print("[TilingController] Cycled layout mode -> \(modeName)")
         applyLayout()
+    }
+
+    private var isScrolling: Bool {
+        talys_engine_get_layout_mode() == UInt8(TALYS_LAYOUT_SCROLLING)
+    }
+
+    /// Scrolling layout: steps the focused column through 1/3, 1/2 and 2/3 of the screen.
+    public func cycleColumnWidth() {
+        guard isActive, isScrolling else { return }
+        syncCurrentFocus()
+        talys_engine_cycle_column_width()
+        applyLayout()
+    }
+
+    /// Scrolling layout: stacks the focused window into the column on that side, or pulls it out into its own.
+    public func consumeOrExpel(_ direction: UInt8) {
+        guard isActive, isScrolling else { return }
+        syncCurrentFocus()
+        if talys_engine_consume_or_expel(direction) {
+            applyLayout()
+        }
     }
 
     /// Switches instantly: hidden windows are parked at full size, shown ones snap into their tiles.
@@ -452,9 +508,11 @@ public final class TilingController {
         WindowAnimator.shared.stop()
         for wid in hideIds.prefix(counts.hide_count) {
             if let record = records[wid] { park(record) }
+            scrolledOff.remove(wid)
         }
         let shown = Set(showIds.prefix(counts.show_count))
         parked.subtract(shown)
+        scrolledOff.subtract(shown)
         applyLayout(snapping: shown)
         refreshCurtain()
 
@@ -496,6 +554,7 @@ public final class TilingController {
             print("[TilingController] Moved window [ID \(currentFocus)] \"\(record.title)\" to workspace \(target)")
             WindowAnimator.shared.stop()
             park(record)
+            scrolledOff.remove(record.id)
             applyLayout()
             refreshCurtain()
             focusEngineWindow()
@@ -503,7 +562,11 @@ public final class TilingController {
         }
     }
 
+    /// Mirrors the engine's outer gap so the screen rect can line windows up under the bar.
+    public private(set) var outerGap: Double = 10.0
+
     public func setGaps(inner: Double, outer: Double) {
+        outerGap = outer
         talys_engine_set_gaps(inner, outer)
         applyLayout()
     }
@@ -521,6 +584,7 @@ public final class TilingController {
             AccessibilityHelper.setFrame(for: record.element, frame: scratchpadFrame(index: i))
         }
         parked = parked.filter { scratchpad.contains($0) }
+        scrolledOff.removeAll()
         previousWorkspace = nil
 
         lock.lock()
@@ -528,6 +592,7 @@ public final class TilingController {
         // Scratchpad windows aren't in the engine; keep their records (and IDs) so they stay stashed.
         windowMap = windowMap.filter { scratchpad.contains($0.key) }
         lock.unlock()
+        minSizes = minSizes.filter { scratchpad.contains($0.key) }
 
         let windows = AccessibilityHelper.getAllStandardWindows()
         for w in windows {
@@ -545,14 +610,11 @@ public final class TilingController {
     public func applyLayout(snapping: Set<TalysWindowId> = []) {
         guard isActive else { return }
         let screenRect = Self.getAxScreenRect()
-        let maxCount = 128
-
-        var outIds = [TalysWindowId](repeating: 0, count: maxCount)
-        var outRects = [TalysRect](repeating: TalysRect(x: 0, y: 0, width: 0, height: 0), count: maxCount)
-
-        let count = Int(talys_engine_calculate_layout(screenRect, maxCount, &outIds, &outRects))
+        let screen = CGRect(x: screenRect.x, y: screenRect.y, width: screenRect.width, height: screenRect.height)
+        let tiles = layoutFloatingWhatDoesntFit(screenRect)
         layoutTargets.removeAll()
-        guard count > 0 else {
+        parkOnArrival.removeAll()
+        guard !tiles.isEmpty else {
             BorderController.shared.refresh()
             return
         }
@@ -562,21 +624,132 @@ public final class TilingController {
         lock.unlock()
 
         var animationFrames: [(element: AXUIElement, currentFrame: CGRect, targetFrame: CGRect)] = []
+        var curtainChanged = false
 
-        for i in 0..<count {
-            let wid = outIds[i]
-            let r = outRects[i]
+        for (wid, targetFrame) in tiles {
             guard let record = records[wid] else { continue }
 
-            let targetFrame = CGRect(x: r.x, y: r.y, width: r.width, height: r.height)
-            layoutTargets[wid] = targetFrame
-            let currentFrame = snapping.contains(wid) ? targetFrame : (AccessibilityHelper.getFrame(for: record.element) ?? targetFrame)
+            // Scrolling layout: columns out of view wait in the parking lot, like hidden workspaces.
+            if targetFrame.intersection(screen).width < Self.minVisibleWidth {
+                scrolledOff.insert(wid)
+                if parked.contains(wid) { continue }
+                if snapping.contains(wid) || !WindowAnimator.shared.isEnabled {
+                    park(record)
+                    curtainChanged = true
+                } else {
+                    // Slide out of view first; `windowPlaced` parks it on arrival.
+                    parkOnArrival.insert(wid)
+                    let current = AccessibilityHelper.getFrame(for: record.element) ?? targetFrame
+                    animationFrames.append((element: record.element, currentFrame: current, targetFrame: targetFrame))
+                }
+                continue
+            }
 
+            layoutTargets[wid] = targetFrame
+            var currentFrame = snapping.contains(wid) ? targetFrame : (AccessibilityHelper.getFrame(for: record.element) ?? targetFrame)
+            if scrolledOff.remove(wid) != nil, parked.remove(wid) != nil {
+                curtainChanged = true
+                // Scrolled back into view: slide in from the edge it left by.
+                if !snapping.contains(wid) {
+                    let dx = targetFrame.midX < screen.midX ? -targetFrame.width : targetFrame.width
+                    currentFrame = targetFrame.offsetBy(dx: dx, dy: 0)
+                }
+            }
             animationFrames.append((element: record.element, currentFrame: currentFrame, targetFrame: targetFrame))
         }
 
         WindowAnimator.shared.animate(frames: animationFrames)
+        if curtainChanged { refreshCurtain() }
         BorderController.shared.refresh()
+    }
+
+    /// Runs the engine's layout. In tiling layouts where a window's minimum size can't fit any split, the newest
+    /// such window is floated (centred on top) and the layout rerun, until everything left fits.
+    private func layoutFloatingWhatDoesntFit(_ screenRect: TalysRect) -> [(TalysWindowId, CGRect)] {
+        let maxCount = 128
+        var outIds = [TalysWindowId](repeating: 0, count: maxCount)
+        var outRects = [TalysRect](repeating: TalysRect(x: 0, y: 0, width: 0, height: 0), count: maxCount)
+
+        while true {
+            let count = Int(talys_engine_calculate_layout(screenRect, maxCount, &outIds, &outRects))
+            let tiles = (0..<count).map { i in
+                (outIds[i], CGRect(x: outRects[i].x, y: outRects[i].y, width: outRects[i].width, height: outRects[i].height))
+            }
+
+            let mode = Int32(talys_engine_get_layout_mode())
+            guard count > 1, mode == TALYS_LAYOUT_DWINDLE || mode == TALYS_LAYOUT_MASTER_STACK, !talys_engine_is_fullscreen() else {
+                return tiles
+            }
+            let tooSmall = tiles.filter { wid, tile in
+                guard let min = minSizes[wid] else { return false }
+                return min.width > tile.width + 1 || min.height > tile.height + 1
+            }
+            guard let newest = tooSmall.map(\.0).max() else { return tiles }
+
+            _ = talys_engine_toggle_float(newest)
+            lock.lock()
+            let record = windowMap[newest]
+            lock.unlock()
+            if let record {
+                print("[TilingController] Window [ID \(newest)] \"\(record.title)\" can't shrink to fit a tile; floating it")
+                AccessibilityHelper.setFrame(for: record.element, frame: centredFrame(fitting: minSizes[newest] ?? .zero, in: screenRect))
+            }
+        }
+    }
+
+    private func centredFrame(fitting min: CGSize, in screenRect: TalysRect) -> CGRect {
+        let bounds = CGRect(x: screenRect.x, y: screenRect.y, width: screenRect.width, height: screenRect.height)
+            .insetBy(dx: outerGap, dy: outerGap)
+        let w = Swift.min(bounds.width, Swift.max(min.width, bounds.width * 0.5))
+        let h = Swift.min(bounds.height, Swift.max(min.height, bounds.height * 0.6))
+        return CGRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
+    }
+
+    /// Drops what's known about windows that are gone.
+    private func forget(_ wids: [TalysWindowId]) {
+        for wid in wids {
+            minSizes.removeValue(forKey: wid)
+            scrolledOff.remove(wid)
+            parkOnArrival.remove(wid)
+        }
+    }
+
+    /// Called once the animator has given a window its final frame.
+    fileprivate func windowPlaced(element: AXUIElement, target: CGRect) {
+        guard isActive, let record = findRecord(for: element) else { return }
+        if parkOnArrival.remove(record.id) != nil {
+            if scrolledOff.contains(record.id) {
+                park(record)
+                refreshCurtain()
+            }
+            return
+        }
+        guard layoutTargets[record.id] == target, let actual = AccessibilityHelper.getFrame(for: element) else { return }
+        learnMinSize(record.id, actual: actual.size, requested: target.size)
+        keepOnScreen(element: element, record: record, actual: actual, target: target)
+    }
+
+    /// An app that ends up bigger than the tile it was given has hit its minimum size on that axis. Record it
+    /// and lay out again, so the tile grows to fit (or the window floats if nothing can).
+    private func learnMinSize(_ wid: TalysWindowId, actual: CGSize, requested: CGSize) {
+        let old = minSizes[wid] ?? .zero
+        var new = old
+        if actual.width > requested.width + 1 { new.width = Swift.max(old.width, actual.width) }
+        if actual.height > requested.height + 1 { new.height = Swift.max(old.height, actual.height) }
+        guard new != old else { return }
+
+        minSizes[wid] = new
+        talys_engine_set_min_size(wid, new.width, new.height)
+        print("[TilingController] Window [ID \(wid)] won't go below \(Int(new.width))×\(Int(new.height)); relaying out")
+        guard !relayoutPending else { return }
+        relayoutPending = true
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                let tc = TilingController.shared
+                tc.relayoutPending = false
+                tc.applyLayout()
+            }
+        }
     }
 
     /// A window moved or resized. Parked ones get the curtain re-fitted; settling ones that the app pulled out
@@ -605,6 +778,24 @@ public final class TilingController {
         if drift >= 2 {
             AccessibilityHelper.setFrame(for: element, frame: target)
         }
+    }
+
+    /// Until the relayout that makes room for it, a window stuck at its minimum size may hang off the screen
+    /// edge. Slide it back inside the usable area and remember where it ended up, so the settle check doesn't
+    /// keep fighting the app.
+    private func keepOnScreen(element: AXUIElement, record: WindowRecord, actual: CGRect, target: CGRect) {
+        guard actual.width > target.width + 1 || actual.height > target.height + 1 else { return }
+
+        let r = Self.getAxScreenRect()
+        let bounds = CGRect(x: r.x, y: r.y, width: r.width, height: r.height).insetBy(dx: outerGap, dy: outerGap)
+        var origin = actual.origin
+        origin.x = max(bounds.minX, min(origin.x, bounds.maxX - actual.width))
+        origin.y = max(bounds.minY, min(origin.y, bounds.maxY - actual.height))
+
+        if origin != actual.origin {
+            AccessibilityHelper.setPosition(for: element, to: origin)
+        }
+        layoutTargets[record.id] = CGRect(origin: origin, size: actual.size)
     }
 
     // MARK: - Home Space
@@ -654,6 +845,9 @@ public final class TilingController {
             scratchpad.removeAll { $0 == record.id }
             parked.remove(record.id)
             talys_engine_add_window(record.id)
+            if let min = minSizes[record.id] {
+                talys_engine_set_min_size(record.id, min.width, min.height)
+            }
             talys_engine_set_focus(record.id)
             print("[TilingController] Window [ID \(record.id)] \"\(record.title)\" left the scratchpad")
             updateScratchpadState()

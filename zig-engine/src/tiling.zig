@@ -2,6 +2,7 @@ const std = @import("std");
 const geometry = @import("geometry.zig");
 const bsp = @import("bsp.zig");
 const workspace = @import("workspace.zig");
+const constraints = @import("constraints.zig");
 
 pub const Rect = geometry.Rect;
 pub const GapConfig = geometry.GapConfig;
@@ -12,17 +13,20 @@ pub const SwitchCounts = workspace.SwitchCounts;
 
 var global_workspaces: workspace.WorkspaceManager = undefined;
 var global_gaps: GapConfig = GapConfig{};
+var global_mins: constraints.MinSizes = .{};
 var is_initialized: bool = false;
 
 pub export fn talys_engine_init() void {
     global_workspaces = workspace.WorkspaceManager.init();
     global_gaps = GapConfig{};
+    global_mins.reset();
     is_initialized = true;
 }
 
 pub export fn talys_engine_reset() void {
     if (!is_initialized) talys_engine_init();
     global_workspaces.reset();
+    global_mins.reset();
 }
 
 pub export fn talys_engine_set_gaps(inner: f64, outer: f64) void {
@@ -43,6 +47,13 @@ pub export fn talys_engine_add_window_to_workspace(wid: WindowId, target_ws: u8)
 pub export fn talys_engine_remove_window(wid: WindowId) void {
     if (!is_initialized) return;
     global_workspaces.removeWindow(wid);
+    global_mins.remove(wid);
+}
+
+/// Smallest size the window's app accepts; layouts size tiles to fit it where they can.
+pub export fn talys_engine_set_min_size(wid: WindowId, width: f64, height: f64) void {
+    if (!is_initialized) talys_engine_init();
+    global_mins.set(wid, .{ .width = width, .height = height });
 }
 
 pub export fn talys_engine_has_window(wid: WindowId) bool {
@@ -64,14 +75,14 @@ pub export fn talys_engine_focus_direction(direction: u8, screen_rect: Rect) Win
     if (!is_initialized) return 0;
     if (direction > 3) return 0;
     const dir: Direction = @enumFromInt(direction);
-    return global_workspaces.getActiveEngine().focusDirection(dir, screen_rect, global_gaps) orelse 0;
+    return global_workspaces.getActiveEngine().focusDirection(dir, screen_rect, global_gaps, &global_mins) orelse 0;
 }
 
 pub export fn talys_engine_swap_direction(direction: u8, screen_rect: Rect) bool {
     if (!is_initialized) return false;
     if (direction > 3) return false;
     const dir: Direction = @enumFromInt(direction);
-    return global_workspaces.getActiveEngine().swapDirection(dir, screen_rect, global_gaps);
+    return global_workspaces.getActiveEngine().swapDirection(dir, screen_rect, global_gaps, &global_mins);
 }
 
 pub export fn talys_engine_resize_focused(delta: f64) void {
@@ -111,7 +122,7 @@ pub export fn talys_engine_get_layout_mode() u8 {
 
 pub export fn talys_engine_set_layout_mode(mode: u8) void {
     if (!is_initialized) return;
-    if (mode <= 2) {
+    if (mode <= 3) {
         global_workspaces.getActiveEngine().layout_mode = @enumFromInt(mode);
     }
 }
@@ -126,11 +137,23 @@ pub export fn talys_engine_calculate_layout(
     const count = global_workspaces.getActiveEngine().calculateLayout(
         screen_rect,
         global_gaps,
+        &global_mins,
         max_count,
         out_ids,
         out_rects,
     );
     return @as(c_int, @intCast(count));
+}
+
+pub export fn talys_engine_cycle_column_width() void {
+    if (!is_initialized) return;
+    global_workspaces.getActiveEngine().cycleColumnWidth();
+}
+
+pub export fn talys_engine_consume_or_expel(direction: u8) bool {
+    if (!is_initialized) return false;
+    if (direction > 3) return false;
+    return global_workspaces.getActiveEngine().consumeOrExpel(@enumFromInt(direction));
 }
 
 pub export fn talys_engine_get_active_workspace() u8 {
