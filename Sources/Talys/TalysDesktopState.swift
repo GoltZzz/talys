@@ -28,6 +28,8 @@ public final class TalysDesktopState {
     public var wifiSSID: String = "Wi-Fi"
     public var volumePercent: Int = 50
     public var isMuted: Bool = false
+    public var outputDeviceName: String = ""
+    public var outputDevices: [AudioOutputDevice] = []
     public var timeString: String = ""
     public var dateString: String = ""
     public var showAltClock: Bool = false

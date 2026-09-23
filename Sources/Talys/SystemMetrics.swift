@@ -1,7 +1,6 @@
 import Cocoa
 import IOKit.ps
 import CoreWLAN
-import AudioToolbox
 
 @MainActor
 public final class SystemMetricsService {
@@ -54,11 +53,6 @@ public final class SystemMetricsService {
         let (connected, ssid) = getWiFiInfo()
         state.wifiConnected = connected
         state.wifiSSID = ssid
-
-        // Audio
-        let (vol, muted) = getAudioVolume()
-        state.volumePercent = Int(vol * 100.0)
-        state.isMuted = muted
     }
 
     private func getBatteryInfo() -> (Int, Bool) {
@@ -89,45 +83,5 @@ public final class SystemMetricsService {
         let ssid = interface.ssid() ?? "Wi-Fi"
         let rssi = interface.rssiValue()
         return (rssi != 0, ssid)
-    }
-
-    private func getAudioVolume() -> (Float, Bool) {
-        var defaultDeviceID = AudioDeviceID(0)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            0,
-            nil,
-            &size,
-            &defaultDeviceID
-        ) == noErr else {
-            return (0.5, false)
-        }
-
-        var vol: Float32 = 0.5
-        address.mSelector = kAudioDevicePropertyVolumeScalar
-        address.mScope = kAudioDevicePropertyScopeOutput
-        address.mElement = kAudioObjectPropertyElementMain
-        var volSize = UInt32(MemoryLayout<Float32>.size)
-        
-        let err = AudioObjectGetPropertyData(defaultDeviceID, &address, 0, nil, &volSize, &vol)
-        if err != noErr {
-            // Some devices use element 1 for channel 1
-            address.mElement = 1
-            _ = AudioObjectGetPropertyData(defaultDeviceID, &address, 0, nil, &volSize, &vol)
-        }
-
-        var mute: UInt32 = 0
-        address.mSelector = kAudioDevicePropertyMute
-        var muteSize = UInt32(MemoryLayout<UInt32>.size)
-        _ = AudioObjectGetPropertyData(defaultDeviceID, &address, 0, nil, &muteSize, &mute)
-
-        return (max(0.0, min(1.0, vol)), mute == 1)
     }
 }

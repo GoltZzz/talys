@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         SystemMetricsService.shared.start()
+        AudioController.shared.start()
         lifecycleObserver.start()
 
         SpaceMonitor.shared.onAwayChanged = { away in
@@ -222,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WindowAnimator.shared.stop()
         tilingController.unparkAll()
         print("[Talys] Stopped.")
+        LogFile.shared.stop()
     }
 }
 
@@ -244,6 +246,7 @@ struct TalysApp {
             return
         }
 
+        LogFile.shared.start()
         let app = NSApplication.shared
         let del = AppDelegate()
         delegate = del

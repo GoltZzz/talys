@@ -27,15 +27,18 @@ public struct OmarchyBarView: View {
     public var onSwitchWorkspace: ((UInt8) -> Void)?
     public var onCycleLayout: (() -> Void)?
     public var onShowBrandMenu: (() -> Void)?
+    public var onShowVolumeMenu: (() -> Void)?
 
     public init(
         onSwitchWorkspace: ((UInt8) -> Void)? = nil,
         onCycleLayout: (() -> Void)? = nil,
-        onShowBrandMenu: (() -> Void)? = nil
+        onShowBrandMenu: (() -> Void)? = nil,
+        onShowVolumeMenu: (() -> Void)? = nil
     ) {
         self.onSwitchWorkspace = onSwitchWorkspace
         self.onCycleLayout = onCycleLayout
         self.onShowBrandMenu = onShowBrandMenu
+        self.onShowVolumeMenu = onShowVolumeMenu
     }
 
     public var body: some View {
@@ -52,7 +55,8 @@ public struct OmarchyBarView: View {
             // Right Island: Layout, System Status, Clock
             RightIslandView(
                 desktopState: desktopState,
-                onCycleLayout: onCycleLayout
+                onCycleLayout: onCycleLayout,
+                onShowVolumeMenu: onShowVolumeMenu
             )
         }
         .padding(.horizontal, 14)
@@ -196,6 +200,8 @@ private struct LeftIslandView: View {
 private struct RightIslandView: View {
     let desktopState: TalysDesktopState
     var onCycleLayout: (() -> Void)?
+    var onShowVolumeMenu: (() -> Void)?
+    @State private var volumeHovered = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -217,15 +223,32 @@ private struct RightIslandView: View {
             }
             .buttonStyle(.plain)
 
-            // Audio Volume
+            // Audio Volume: click for menu, right-click to mute, scroll to adjust
             HStack(spacing: 3) {
                 Image(systemName: volumeIcon)
                     .font(.system(size: 10))
                     .foregroundColor(desktopState.isMuted ? Palette.red : Palette.text)
+                    .frame(width: 14)
                 Text("\(desktopState.volumePercent)%")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundColor(desktopState.isMuted ? Palette.overlay0 : Palette.text)
+                    .contentTransition(.numericText(value: Double(desktopState.volumePercent)))
+                    .animation(.snappy(duration: 0.15), value: desktopState.volumePercent)
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(volumeHovered ? Palette.surface0.opacity(0.7) : Color.clear)
+            .clipShape(Capsule())
+            .overlay(
+                PointerInputCatcher(
+                    onClick: { onShowVolumeMenu?() },
+                    onRightClick: { AudioController.shared.toggleMute() },
+                    onScroll: { AudioController.shared.adjustVolume(by: $0) },
+                    onHover: { volumeHovered = $0 }
+                )
+            )
+            .help(volumeHelp)
+            .padding(.horizontal, -6)
 
             // Wi-Fi
             HStack(spacing: 4) {
@@ -304,6 +327,11 @@ private struct RightIslandView: View {
         }
     }
 
+    private var volumeHelp: String {
+        let device = desktopState.outputDeviceName.isEmpty ? "Volume" : desktopState.outputDeviceName
+        return "\(device) — scroll to adjust, right-click to mute"
+    }
+
     private var batteryIcon: String {
         if desktopState.isCharging {
             return "battery.100.bolt"
@@ -321,6 +349,62 @@ private struct RightIslandView: View {
         if desktopState.batteryPercent < 15 { return Palette.red }
         if desktopState.batteryPercent < 30 { return Palette.yellow }
         return Palette.text
+    }
+}
+
+// MARK: - Pointer Input Catcher
+/// Transparent AppKit layer for input SwiftUI can't express on macOS 14: scroll wheel and right-click.
+struct PointerInputCatcher: NSViewRepresentable {
+    var onClick: () -> Void
+    var onRightClick: () -> Void
+    /// Receives a volume delta in 0...1 units; positive means the user pushed up.
+    var onScroll: (Float) -> Void
+    var onHover: (Bool) -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        let view = CatcherView()
+        view.handlers = self
+        return view
+    }
+
+    func updateNSView(_ nsView: CatcherView, context: Context) {
+        nsView.handlers = self
+    }
+
+    final class CatcherView: NSView {
+        var handlers: PointerInputCatcher?
+        private var trackingArea: NSTrackingArea?
+        private var preciseAccumulator: CGFloat = 0
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let trackingArea { removeTrackingArea(trackingArea) }
+            let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+            addTrackingArea(area)
+            trackingArea = area
+        }
+
+        override func mouseEntered(with event: NSEvent) { handlers?.onHover(true) }
+        override func mouseExited(with event: NSEvent) { handlers?.onHover(false) }
+        override func mouseDown(with event: NSEvent) { handlers?.onClick() }
+        override func rightMouseDown(with event: NSEvent) { handlers?.onRightClick() }
+
+        override func scrollWheel(with event: NSEvent) {
+            // Normalize so "fingers/wheel up" always means louder, regardless of natural scrolling.
+            let dy = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
+            if event.hasPreciseScrollingDeltas {
+                // Trackpad: step in whole percents so a long swipe feels smooth, not jumpy.
+                preciseAccumulator += dy * 0.25
+                let steps = preciseAccumulator.rounded(.towardZero)
+                guard steps != 0 else { return }
+                preciseAccumulator -= steps
+                handlers?.onScroll(Float(steps) / 100)
+            } else if dy != 0 {
+                handlers?.onScroll(dy > 0 ? 0.05 : -0.05)
+            }
+        }
     }
 }
 

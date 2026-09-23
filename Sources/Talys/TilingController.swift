@@ -48,6 +48,8 @@ public final class TilingController {
     private var parkOnArrival: Set<TalysWindowId> = []
     /// Less than this much of a column on screen isn't worth showing; it's parked instead.
     private static let minVisibleWidth: CGFloat = 40
+    /// Mirrors the engine's `min_tile`: no tiled window gets less than this.
+    private static let minTile = CGSize(width: 300, height: 150)
     /// A window that can't fit its workspace moves to the next one with room (else it floats).
     private var overflowToWorkspace = true
     /// Newly opened windows that overflow take the view with them; otherwise the bar flashes their workspace.
@@ -726,9 +728,11 @@ public final class TilingController {
             guard count > 1, mode == TALYS_LAYOUT_DWINDLE || mode == TALYS_LAYOUT_MASTER_STACK, !talys_engine_is_fullscreen() else {
                 return tiles
             }
+            // Same floor the engine lays out with, so a window it couldn't fit is never left in a sliver.
             let tooSmall = tiles.filter { wid, tile in
-                guard let min = minSizes[wid] else { return false }
-                return min.width > tile.width + 1 || min.height > tile.height + 1
+                let min = minSizes[wid] ?? .zero
+                return Swift.max(min.width, Self.minTile.width) > tile.width + 1
+                    || Swift.max(min.height, Self.minTile.height) > tile.height + 1
             }
             guard let newest = tooSmall.map(\.0).max() else { return tiles }
 
@@ -867,8 +871,15 @@ public final class TilingController {
 
         let drift = max(abs(frame.minX - target.minX), abs(frame.minY - target.minY),
                         abs(frame.width - target.width), abs(frame.height - target.height))
-        if drift >= 2 {
-            AccessibilityHelper.setFrame(for: element, frame: target)
+        guard drift >= 2 else { return }
+        AccessibilityHelper.setFrame(for: element, frame: target)
+
+        // Still bigger than its tile after being put back: the app can't go that small. Learn it rather than
+        // fighting it (which leaves it stuck behind its neighbour).
+        if let after = AccessibilityHelper.getFrame(for: element),
+           after.width > target.width + 1 || after.height > target.height + 1 {
+            learnMinSize(wid, actual: after.size, requested: target.size)
+            keepOnScreen(element: element, record: record, actual: after, target: target)
         }
     }
 
