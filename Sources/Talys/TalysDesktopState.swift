@@ -17,6 +17,9 @@ public final class TalysDesktopState {
     public var isAwayFromHome: Bool = false
     public var scratchpadCount: Int = 0
     public var scratchpadVisible: Bool = false
+    /// Workspace briefly highlighted in the bar because a window was sent there without the view following.
+    public var flashedWorkspace: UInt8? = nil
+    private var flashGeneration = 0
 
     // MARK: - System Metrics
     public var batteryPercent: Int = 100
@@ -44,6 +47,18 @@ public final class TalysDesktopState {
             occupied.insert(activeWorkspace)
         }
         self.occupiedWorkspaces = occupied
+    }
+
+    public func flashWorkspace(_ ws: UInt8) {
+        flashedWorkspace = ws
+        flashGeneration += 1
+        let generation = flashGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            MainActor.assumeIsolated {
+                let state = TalysDesktopState.shared
+                if state.flashGeneration == generation { state.flashedWorkspace = nil }
+            }
+        }
     }
 
     public func updateLayoutModeFromEngine() {

@@ -48,6 +48,14 @@ public final class TilingController {
     private var parkOnArrival: Set<TalysWindowId> = []
     /// Less than this much of a column on screen isn't worth showing; it's parked instead.
     private static let minVisibleWidth: CGFloat = 40
+    /// A window that can't fit its workspace moves to the next one with room (else it floats).
+    private var overflowToWorkspace = true
+    /// Newly opened windows that overflow take the view with them; otherwise the bar flashes their workspace.
+    private var overflowFollow = true
+    /// Workspace to switch to once the current layout pass is done.
+    private var pendingFollow: UInt8?
+    /// True while picking up windows that were already open (startup, retile); those never take the view along.
+    private var adoptingExisting = false
 
     public var onWorkspaceChanged: ((UInt8) -> Void)?
     public var barConfig: BarConfig = BarConfig()
@@ -141,6 +149,11 @@ public final class TilingController {
         self.rulesMatcher = WindowRulesMatcher(rules: rules)
     }
 
+    public func setOverflow(toWorkspace: Bool, follow: Bool) {
+        overflowToWorkspace = toWorkspace
+        overflowFollow = follow
+    }
+
     public func setAnimations(enabled: Bool, durationMs: Double) {
         WindowAnimator.shared.isEnabled = enabled
         WindowAnimator.shared.duration = max(0.01, durationMs / 1000.0)
@@ -227,8 +240,18 @@ public final class TilingController {
         let appName = NSRunningApplication(processIdentifier: pid)?.localizedName
         let matchedRule = rulesMatcher.match(appName: appName, windowTitle: title)
 
+        applyRememberedMinSize(wid, pid: pid)
+
         let currentWs = talys_engine_get_active_workspace()
-        let targetWs = matchedRule?.workspace ?? currentWs
+        var targetWs = matchedRule?.workspace ?? currentWs
+        // A rule's workspace that's already full cascades on to the next one with room.
+        if targetWs != currentWs, overflowToWorkspace, !talys_engine_fits_on_workspace(wid, targetWs, Self.getAxScreenRect()) {
+            let room = talys_engine_find_room(wid, targetWs, 0, Self.getAxScreenRect())
+            if room != 0 {
+                print("[TilingController] Workspace \(targetWs) is full; window [ID \(wid)] goes to \(room) instead")
+                targetWs = room
+            }
+        }
 
         if targetWs != currentWs {
             talys_engine_add_window_to_workspace(wid, targetWs)
@@ -244,11 +267,12 @@ public final class TilingController {
                 print("[TilingController] Window rule applied: auto-float [ID \(wid)]")
             }
 
-            // Snap the new window straight into its tile; neighbours still animate.
-            applyLayout(snapping: [wid])
+            // Marked settling first: the layout may overflow it to another workspace, and new windows take the view along.
             let now = ProcessInfo.processInfo.systemUptime
             settling = settling.filter { $0.value > now }
             settling[wid] = now + Self.settleDuration
+            // Snap the new window straight into its tile; neighbours still animate.
+            applyLayout(snapping: [wid])
         }
         TalysDesktopState.shared.updateOccupiedWorkspaces()
         return true
@@ -551,7 +575,16 @@ public final class TilingController {
         guard let record = record else { return }
 
         if talys_engine_move_to_workspace(currentFocus, target) {
-            print("[TilingController] Moved window [ID \(currentFocus)] \"\(record.title)\" to workspace \(target)")
+            var landed = target
+            // Full already: cascade on to the next workspace with room (never back to where it came from).
+            if overflowToWorkspace, !talys_engine_fits_on_workspace(currentFocus, target, Self.getAxScreenRect()) {
+                let room = talys_engine_find_room(currentFocus, target, currentWs, Self.getAxScreenRect())
+                if room != 0, talys_engine_move_to_workspace(currentFocus, room) {
+                    landed = room
+                    TalysDesktopState.shared.flashWorkspace(room)
+                }
+            }
+            print("[TilingController] Moved window [ID \(currentFocus)] \"\(record.title)\" to workspace \(landed)")
             WindowAnimator.shared.stop()
             park(record)
             scrolledOff.remove(record.id)
@@ -594,10 +627,12 @@ public final class TilingController {
         lock.unlock()
         minSizes = minSizes.filter { scratchpad.contains($0.key) }
 
+        adoptingExisting = true
         let windows = AccessibilityHelper.getAllStandardWindows()
         for w in windows {
             addWindow(element: w.element, pid: w.pid, title: w.title)
         }
+        adoptingExisting = false
 
         if let focused = AccessibilityHelper.getFocusedWindow() {
             setFocusedWindow(element: focused.element)
@@ -661,10 +696,21 @@ public final class TilingController {
         WindowAnimator.shared.animate(frames: animationFrames)
         if curtainChanged { refreshCurtain() }
         BorderController.shared.refresh()
+        followOverflow()
+    }
+
+    /// Switches to the workspace a newly opened window overflowed to, once the layout pass that moved it is done.
+    private func followOverflow() {
+        guard let ws = pendingFollow else { return }
+        pendingFollow = nil
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { TilingController.shared.switchWorkspace(ws, backAndForth: false) }
+        }
     }
 
     /// Runs the engine's layout. In tiling layouts where a window's minimum size can't fit any split, the newest
-    /// such window is floated (centred on top) and the layout rerun, until everything left fits.
+    /// such window moves to the next workspace with room (or floats, centred on top, when there's none or
+    /// overflow is set to float) and the layout reruns, until everything left fits.
     private func layoutFloatingWhatDoesntFit(_ screenRect: TalysRect) -> [(TalysWindowId, CGRect)] {
         let maxCount = 128
         var outIds = [TalysWindowId](repeating: 0, count: maxCount)
@@ -686,15 +732,55 @@ public final class TilingController {
             }
             guard let newest = tooSmall.map(\.0).max() else { return tiles }
 
-            _ = talys_engine_toggle_float(newest)
             lock.lock()
             let record = windowMap[newest]
             lock.unlock()
+
+            if overflowToWorkspace, moveToWorkspaceWithRoom(newest, record: record, screenRect: screenRect) {
+                continue
+            }
+
+            _ = talys_engine_toggle_float(newest)
             if let record {
                 print("[TilingController] Window [ID \(newest)] \"\(record.title)\" can't shrink to fit a tile; floating it")
                 AccessibilityHelper.setFrame(for: record.element, frame: centredFrame(fitting: minSizes[newest] ?? .zero, in: screenRect))
             }
         }
+    }
+
+    /// Sends a window that doesn't fit here to the next workspace with room. A freshly opened one takes the view
+    /// along (when `overflowFollow`); anything else just flashes its new workspace in the bar.
+    private func moveToWorkspaceWithRoom(_ wid: TalysWindowId, record: WindowRecord?, screenRect: TalysRect) -> Bool {
+        let currentWs = talys_engine_get_active_workspace()
+        let room = talys_engine_find_room(wid, currentWs, 0, screenRect)
+        guard room != 0, talys_engine_move_to_workspace(wid, room) else { return false }
+
+        print("[TilingController] Window [ID \(wid)] \"\(record?.title ?? "")\" doesn't fit workspace \(currentWs); moved to \(room)")
+        let now = ProcessInfo.processInfo.systemUptime
+        let isNew = !adoptingExisting && (settling[wid].map { $0 > now } ?? false)
+        settling.removeValue(forKey: wid)
+        scrolledOff.remove(wid)
+        parkOnArrival.remove(wid)
+        if let record {
+            WindowAnimator.shared.stop()
+            park(record)
+            refreshCurtain()
+        }
+        if isNew && overflowFollow {
+            pendingFollow = room
+        } else {
+            TalysDesktopState.shared.flashWorkspace(room)
+        }
+        TalysDesktopState.shared.updateOccupiedWorkspaces()
+        return true
+    }
+
+    /// Hands a new window the minimum size its app is known to need, so it's placed right from the start.
+    private func applyRememberedMinSize(_ wid: TalysWindowId, pid: pid_t) {
+        guard let app = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+              let size = MinSizeStore.shared.size(forApp: app) else { return }
+        minSizes[wid] = size
+        talys_engine_set_min_size(wid, size.width, size.height)
     }
 
     private func centredFrame(fitting min: CGSize, in screenRect: TalysRect) -> CGRect {
@@ -740,6 +826,12 @@ public final class TilingController {
 
         minSizes[wid] = new
         talys_engine_set_min_size(wid, new.width, new.height)
+        lock.lock()
+        let pid = windowMap[wid]?.pid
+        lock.unlock()
+        if let pid, let app = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier {
+            MinSizeStore.shared.record(new, forApp: app)
+        }
         print("[TilingController] Window [ID \(wid)] won't go below \(Int(new.width))×\(Int(new.height)); relaying out")
         guard !relayoutPending else { return }
         relayoutPending = true
@@ -817,9 +909,11 @@ public final class TilingController {
 
         print("[TilingController] Resumed on the home desktop.")
         guard isEnabled else { return }
+        adoptingExisting = true
         for w in AccessibilityHelper.getAllStandardWindows() {
             addWindow(element: w.element, pid: w.pid, title: w.title)
         }
+        adoptingExisting = false
         applyLayout()
         refreshCurtain()
         syncCurrentFocus()

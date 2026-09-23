@@ -1,6 +1,8 @@
 const std = @import("std");
 const bsp = @import("bsp.zig");
 const geometry = @import("geometry.zig");
+const constraints = @import("constraints.zig");
+const MinSizes = constraints.MinSizes;
 
 pub const WindowId = bsp.WindowId;
 pub const Rect = geometry.Rect;
@@ -145,6 +147,26 @@ pub const WorkspaceManager = struct {
         return true;
     }
 
+    /// Whether `wid` would get at least its minimum size as a tiled window on workspace `ws`
+    /// (tried on a copy, so nothing changes).
+    pub fn fitsOn(self: *const WorkspaceManager, wid: WindowId, ws: u8, screen_rect: Rect, gaps: GapConfig, mins: *const MinSizes) bool {
+        if (ws < 1 or ws > WORKSPACE_COUNT) return false;
+        var trial = self.workspaces[@as(usize, ws - 1)];
+        if (!trial.hasWindow(wid)) trial.addWindow(wid);
+        return trial.allFit(screen_rect, gaps, mins);
+    }
+
+    /// First workspace after `after` (wrapping around, never `after` or `skip`) where `wid` fits; 0 if none.
+    pub fn findRoom(self: *const WorkspaceManager, wid: WindowId, after: u8, skip: u8, screen_rect: Rect, gaps: GapConfig, mins: *const MinSizes) u8 {
+        const start: usize = if (after >= 1 and after <= WORKSPACE_COUNT) after - 1 else 0;
+        for (1..WORKSPACE_COUNT) |step| {
+            const ws: u8 = @intCast((start + step) % WORKSPACE_COUNT + 1);
+            if (ws == skip) continue;
+            if (self.fitsOn(wid, ws, screen_rect, gaps, mins)) return ws;
+        }
+        return 0;
+    }
+
     pub fn getWorkspaceWindowCount(self: *const WorkspaceManager, ws: u8) usize {
         if (ws < 1 or ws > WORKSPACE_COUNT) return 0;
         const engine = &self.workspaces[@as(usize, ws - 1)];
@@ -183,4 +205,28 @@ test "WorkspaceManager basic operations" {
     try std.testing.expectEqual(@as(?u8, 2), wm.findWorkspaceForWindow(101));
     try std.testing.expectEqual(@as(usize, 1), wm.getWorkspaceWindowCount(1));
     try std.testing.expectEqual(@as(usize, 2), wm.getWorkspaceWindowCount(2));
+}
+
+test "WorkspaceManager finds a workspace with room" {
+    var wm = WorkspaceManager.init();
+    const screen = Rect{ .x = 0, .y = 0, .width = 1000, .height = 600 };
+    const gaps = GapConfig{ .inner = 0, .outer = 0 };
+    var mins = MinSizes{};
+    mins.set(1, .{ .width = 700 });
+    mins.set(2, .{ .width = 700 });
+    mins.set(3, .{ .width = 700 });
+
+    wm.addWindow(1);
+    wm.addWindowToWorkspace(3, 2);
+    // Too wide to sit side by side, but they fit stacked.
+    try std.testing.expect(wm.fitsOn(2, 1, screen, gaps, &mins));
+    mins.set(1, .{ .width = 700, .height = 400 });
+    mins.set(2, .{ .width = 700, .height = 400 });
+    mins.set(3, .{ .width = 700, .height = 400 });
+    try std.testing.expect(!wm.fitsOn(2, 1, screen, gaps, &mins));
+    // Workspace 2 holds 3 and is full too; 3 is the first with room. Workspace 1 is skipped.
+    try std.testing.expectEqual(@as(u8, 3), wm.findRoom(2, 1, 1, screen, gaps, &mins));
+    // Bigger than the screen: nowhere fits.
+    mins.set(2, .{ .width = 1200 });
+    try std.testing.expectEqual(@as(u8, 0), wm.findRoom(2, 1, 1, screen, gaps, &mins));
 }

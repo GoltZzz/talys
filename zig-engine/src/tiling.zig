@@ -178,6 +178,18 @@ pub export fn talys_engine_move_to_workspace(wid: WindowId, target_ws: u8) bool 
     return global_workspaces.moveWindowToWorkspace(wid, target_ws);
 }
 
+/// Whether `wid` would get its minimum size as a tiled window on workspace `ws`.
+pub export fn talys_engine_fits_on_workspace(wid: WindowId, ws: u8, screen_rect: Rect) bool {
+    if (!is_initialized) return true;
+    return global_workspaces.fitsOn(wid, ws, screen_rect, global_gaps, &global_mins);
+}
+
+/// First workspace after `after` (wrapping, skipping `after` and `skip`) where `wid` fits; 0 if none.
+pub export fn talys_engine_find_room(wid: WindowId, after: u8, skip: u8, screen_rect: Rect) u8 {
+    if (!is_initialized) return 0;
+    return global_workspaces.findRoom(wid, after, skip, screen_rect, global_gaps, &global_mins);
+}
+
 pub export fn talys_engine_get_workspace_window_count(ws: u8) usize {
     if (!is_initialized) return 0;
     return global_workspaces.getWorkspaceWindowCount(ws);

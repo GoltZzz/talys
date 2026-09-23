@@ -699,6 +699,24 @@ pub const BspEngine = struct {
         return true;
     }
 
+    /// True when every tiled window gets at least its minimum size. Scrolling, monocle and fullscreen never
+    /// squeeze windows, so they always fit.
+    pub fn allFit(self: *BspEngine, screen_rect: Rect, gaps: GapConfig, mins: *const MinSizes) bool {
+        if (self.fullscreen) return true;
+        switch (self.layout_mode) {
+            .monocle, .scrolling => return true,
+            .dwindle, .master_stack => {},
+        }
+        var ids: [MAX_WINDOWS]WindowId = undefined;
+        var rects: [MAX_WINDOWS]Rect = undefined;
+        const n = self.calculateLayout(screen_rect, gaps, mins, MAX_WINDOWS, &ids, &rects);
+        for (0..n) |i| {
+            const m = mins.get(ids[i]);
+            if (m.width > rects[i].width + 1 or m.height > rects[i].height + 1) return false;
+        }
+        return true;
+    }
+
     /// Scrolling layout: steps the focused column through the preset widths.
     pub fn cycleColumnWidth(self: *BspEngine) void {
         const wid = self.focused_window orelse return;

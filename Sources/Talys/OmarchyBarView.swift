@@ -94,6 +94,7 @@ private struct LeftIslandView: View {
                     let wsNum = UInt8(ws)
                     let isActive = (wsNum == desktopState.activeWorkspace)
                     let isOccupied = desktopState.occupiedWorkspaces.contains(wsNum)
+                    let isFlashed = !isActive && desktopState.flashedWorkspace == wsNum
 
                     Button(action: {
                         onSwitchWorkspace?(wsNum)
@@ -105,9 +106,11 @@ private struct LeftIslandView: View {
                             .background(
                                 isActive
                                     ? Palette.accent
-                                    : (isOccupied ? Palette.surface1.opacity(0.8) : Color.clear)
+                                    : (isFlashed ? Palette.accent.opacity(0.45)
+                                        : (isOccupied ? Palette.surface1.opacity(0.8) : Color.clear))
                             )
                             .clipShape(Capsule())
+                            .animation(.easeOut(duration: 0.25), value: isFlashed)
                     }
                     .buttonStyle(.plain)
                 }

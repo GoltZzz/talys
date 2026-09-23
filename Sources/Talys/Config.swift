@@ -28,11 +28,19 @@ public struct GeneralConfig: Codable, Sendable {
     public var mod: String = "alt"
     /// Theme name; falls back to `[bar] theme` when unset.
     public var theme: String?
+    /// What happens to a window that can't shrink enough to fit its workspace: "workspace" moves it to the
+    /// next workspace with room, "float" floats it on top.
+    public var overflow: String = "workspace"
+    /// Switch to the workspace a newly opened window overflowed to.
+    public var overflow_follow: Bool = true
 
-    public init(layout: String = "dwindle", mod: String = "alt", theme: String? = nil) {
+    public init(layout: String = "dwindle", mod: String = "alt", theme: String? = nil,
+                overflow: String = "workspace", overflow_follow: Bool = true) {
         self.layout = layout
         self.mod = mod
         self.theme = theme
+        self.overflow = overflow
+        self.overflow_follow = overflow_follow
     }
 
     public init(from decoder: Decoder) throws {
@@ -41,6 +49,8 @@ public struct GeneralConfig: Codable, Sendable {
         layout = try c.decodeIfPresent(String.self, forKey: .layout) ?? d.layout
         mod = try c.decodeIfPresent(String.self, forKey: .mod) ?? d.mod
         theme = try c.decodeIfPresent(String.self, forKey: .theme)
+        overflow = try c.decodeIfPresent(String.self, forKey: .overflow) ?? d.overflow
+        overflow_follow = try c.decodeIfPresent(Bool.self, forKey: .overflow_follow) ?? d.overflow_follow
     }
 }
 
@@ -261,6 +271,8 @@ public enum ConfigManager {
 layout = "dwindle"          # "dwindle", "master_stack", "scrolling", "monocle"
 mod = "alt"                 # Modifier used by "mod+..." binds: "alt", "cmd", "ctrl", "hyper", or combos like "ctrl+alt"
 theme = "catppuccin_mocha"  # catppuccin_mocha, tokyo_night, gruvbox, rose_pine, nord, or ~/.config/talys/themes/<name>.toml
+overflow = "workspace"      # Window too big to fit its workspace: "workspace" (next one with room) or "float"
+overflow_follow = true      # Switch to the workspace a newly opened window overflowed to
 
 [bar]
 enabled = true
@@ -407,6 +419,8 @@ exec = "osascript -e 'tell application \\"Terminal\\" to do script \\"\\"' -e 't
         TalysDesktopState.shared.updateLayoutModeFromEngine()
 
         controller.setWindowRules(config.window_rules)
+        controller.setOverflow(toWorkspace: config.general.overflow.lowercased() != "float",
+                               follow: config.general.overflow_follow)
         controller.setAnimations(enabled: config.animations.enabled, durationMs: config.animations.duration_ms)
         controller.setBarConfig(config.bar)
 

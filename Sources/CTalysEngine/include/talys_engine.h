@@ -84,6 +84,10 @@ bool talys_engine_switch_workspace(
 );
 bool talys_engine_move_to_workspace(TalysWindowId wid, uint8_t target_ws);
 void talys_engine_add_window_to_workspace(TalysWindowId wid, uint8_t target_ws);
+// Whether a window would get its minimum size as a tiled window on workspace `ws`.
+bool talys_engine_fits_on_workspace(TalysWindowId wid, uint8_t ws, TalysRect screen_rect);
+// First workspace after `after` (wrapping, skipping `after` and `skip`) where the window fits; 0 if none.
+uint8_t talys_engine_find_room(TalysWindowId wid, uint8_t after, uint8_t skip, TalysRect screen_rect);
 size_t talys_engine_get_workspace_window_count(uint8_t ws);
 
 #ifdef __cplusplus
