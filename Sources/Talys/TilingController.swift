@@ -547,7 +547,7 @@ public final class TilingController {
         let newFocus = talys_engine_get_focus()
         if newFocus != 0, let record = records[newFocus] {
             AccessibilityHelper.focusWindow(element: record.element, pid: record.pid)
-            BorderController.shared.setTarget(record.element)
+            BorderController.shared.setTarget(record.element, expectedFrame: layoutTargets[newFocus])
             showActiveWindowInfo(record)
         } else {
             NSApp.activate()

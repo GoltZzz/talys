@@ -5,7 +5,7 @@ import SwiftUI
 @MainActor
 public final class BarController: NSObject {
     private var panel: FloatingBarPanel?
-    private var hostingView: NSHostingView<OmarchyBarView>?
+    private var hostingView: NSHostingView<TalysBarView>?
     private var barConfig: BarConfig
 
     public var onToggleEnabled: ((Bool) -> Void)?
@@ -71,7 +71,7 @@ public final class BarController: NSObject {
 
         let newPanel = FloatingBarPanel(contentRect: panelRect)
 
-        let barView = OmarchyBarView(
+        let barView = TalysBarView(
             onSwitchWorkspace: { [weak self] ws in
                 self?.onSwitchWorkspace?(ws)
             },
@@ -83,6 +83,9 @@ public final class BarController: NSObject {
             },
             onShowVolumeMenu: { [weak self] in
                 self?.showVolumeMenu()
+            },
+            onShowWiFiMenu: { [weak self] in
+                self?.showWiFiMenu()
             }
         )
 
@@ -94,7 +97,7 @@ public final class BarController: NSObject {
         self.hostingView = hosting
 
         newPanel.orderFrontRegardless()
-        print("[BarController] Omarchy floating bar panel displayed (height: \(panelHeight)pt)")
+        print("[BarController] Talys floating bar panel displayed (height: \(panelHeight)pt)")
     }
 
     private func updatePanelFrame() {
@@ -207,8 +210,17 @@ public final class BarController: NSObject {
 
     /// Toggles the sound panel, centred under the pointer and hanging just below the bar.
     public func showVolumeMenu() {
+        togglePopover(.sound)
+    }
+
+    /// Toggles the Wi-Fi panel, centred under the pointer and hanging just below the bar.
+    public func showWiFiMenu() {
+        togglePopover(.wifi)
+    }
+
+    private func togglePopover(_ kind: BarPopover) {
         let top = (panel?.frame.minY ?? NSScreen.main?.frame.maxY ?? 0) - 6
-        AudioPanelController.shared.toggle(anchorX: NSEvent.mouseLocation.x, top: top, on: panel?.screen)
+        BarPopoverController.shared.toggle(kind, anchorX: NSEvent.mouseLocation.x, top: top, on: panel?.screen)
     }
 
     /// Shows the action's configured hotkey as the item's shortcut hint, or none if unbound.

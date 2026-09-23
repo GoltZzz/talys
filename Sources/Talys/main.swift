@@ -117,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         tilingController.retileAll()
 
-        print("[Talys] Daemon running with workspaces 1..9, Omarchy floating status bar, animations, and window rules.")
+        print("[Talys] Daemon running with workspaces 1..9, Talys floating status bar, animations, and window rules.")
     }
 
     private func reloadConfig() {

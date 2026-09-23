@@ -21,24 +21,27 @@ enum Palette {
     static var crust: Color { t.crust.color }
 }
 
-public struct OmarchyBarView: View {
+public struct TalysBarView: View {
     @State private var desktopState = TalysDesktopState.shared
 
     public var onSwitchWorkspace: ((UInt8) -> Void)?
     public var onCycleLayout: (() -> Void)?
     public var onShowBrandMenu: (() -> Void)?
     public var onShowVolumeMenu: (() -> Void)?
+    public var onShowWiFiMenu: (() -> Void)?
 
     public init(
         onSwitchWorkspace: ((UInt8) -> Void)? = nil,
         onCycleLayout: (() -> Void)? = nil,
         onShowBrandMenu: (() -> Void)? = nil,
-        onShowVolumeMenu: (() -> Void)? = nil
+        onShowVolumeMenu: (() -> Void)? = nil,
+        onShowWiFiMenu: (() -> Void)? = nil
     ) {
         self.onSwitchWorkspace = onSwitchWorkspace
         self.onCycleLayout = onCycleLayout
         self.onShowBrandMenu = onShowBrandMenu
         self.onShowVolumeMenu = onShowVolumeMenu
+        self.onShowWiFiMenu = onShowWiFiMenu
     }
 
     public var body: some View {
@@ -56,7 +59,8 @@ public struct OmarchyBarView: View {
             RightIslandView(
                 desktopState: desktopState,
                 onCycleLayout: onCycleLayout,
-                onShowVolumeMenu: onShowVolumeMenu
+                onShowVolumeMenu: onShowVolumeMenu,
+                onShowWiFiMenu: onShowWiFiMenu
             )
         }
         .padding(.horizontal, 14)
@@ -201,7 +205,9 @@ private struct RightIslandView: View {
     let desktopState: TalysDesktopState
     var onCycleLayout: (() -> Void)?
     var onShowVolumeMenu: (() -> Void)?
+    var onShowWiFiMenu: (() -> Void)?
     @State private var volumeHovered = false
+    @State private var wifiHovered = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -250,7 +256,7 @@ private struct RightIslandView: View {
             .help(volumeHelp)
             .padding(.horizontal, -6)
 
-            // Wi-Fi
+            // Wi-Fi: click for the Wi-Fi panel
             HStack(spacing: 4) {
                 Image(systemName: desktopState.wifiConnected ? "wifi" : "wifi.slash")
                     .font(.system(size: 10))
@@ -263,6 +269,19 @@ private struct RightIslandView: View {
                         .frame(maxWidth: 80)
                 }
             }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(wifiHovered ? Palette.surface0.opacity(0.7) : Color.clear)
+            .clipShape(Capsule())
+            .overlay(
+                PointerInputCatcher(
+                    onClick: { onShowWiFiMenu?() },
+                    onRightClick: {},
+                    onScroll: { _ in },
+                    onHover: { wifiHovered = $0 }
+                )
+            )
+            .padding(.horizontal, -6)
 
             // Battery
             HStack(spacing: 3) {

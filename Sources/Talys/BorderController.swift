@@ -13,6 +13,10 @@ public final class BorderController {
     private let maskLayer = CAShapeLayer()
     private var target: AXUIElement?
     private var lastFrame: CGRect = .null
+    /// Where the target was just snapped to. Apps apply AX moves a beat late, so until the window reports
+    /// this frame (or the grace period ends) the border draws here instead of at the stale frame.
+    private var expected: (frame: CGRect, until: TimeInterval)?
+    private static let expectGrace: TimeInterval = 0.4
 
     private init() {
         ThemeManager.shared.onThemeChanged = { [weak self] _ in
@@ -27,10 +31,17 @@ public final class BorderController {
         refresh()
     }
 
-    public func setTarget(_ element: AXUIElement?) {
+    public func setTarget(_ element: AXUIElement?, expectedFrame: CGRect? = nil) {
         target = element
+        expected = expectedFrame.map { ($0, ProcessInfo.processInfo.systemUptime + Self.expectGrace) }
         lastFrame = .null
         refresh()
+        if expected != nil {
+            // Catch apps that never send a move event after settling.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.expectGrace + 0.02) { [weak self] in
+                MainActor.assumeIsolated { self?.refresh() }
+            }
+        }
     }
 
     public func isTarget(_ element: AXUIElement) -> Bool {
@@ -47,14 +58,28 @@ public final class BorderController {
         guard config.enabled,
               TalysDesktopState.shared.isTilingEnabled,
               let target,
-              let axFrame = AccessibilityHelper.getFrame(for: target),
-              !ParkingLot.isParked(axFrame),
-              axFrame.width > 1, axFrame.height > 1
+              let frame = currentFrame(of: target),
+              !ParkingLot.isParked(frame),
+              frame.width > 1, frame.height > 1
         else {
             hide()
             return
         }
-        show(axFrame: axFrame)
+        show(axFrame: frame)
+    }
+
+    private func currentFrame(of target: AXUIElement) -> CGRect? {
+        let actual = AccessibilityHelper.getFrame(for: target)
+        guard let expected else { return actual }
+        let arrived = actual.map {
+            max(abs($0.minX - expected.frame.minX), abs($0.minY - expected.frame.minY),
+                abs($0.width - expected.frame.width), abs($0.height - expected.frame.height)) < 2
+        } ?? false
+        if arrived || ProcessInfo.processInfo.systemUptime >= expected.until {
+            self.expected = nil
+            return actual
+        }
+        return expected.frame
     }
 
     public func hide() {
