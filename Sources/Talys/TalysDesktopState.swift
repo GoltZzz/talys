@@ -10,7 +10,7 @@ public final class TalysDesktopState {
     // MARK: - Window Manager State
     public var activeWorkspace: UInt8 = 1
     public var occupiedWorkspaces: Set<UInt8> = [1]
-    public var layoutMode: String = "DWN" // DWN, MST, MON
+    public var layoutMode: String = "Dwindle" // Dwindle, Master-Stack, Monocle
     public var activeWindowTitle: String = "Desktop"
     public var activeAppIcon: NSImage? = nil
     public var isTilingEnabled: Bool = true
@@ -49,9 +49,9 @@ public final class TalysDesktopState {
     public func updateLayoutModeFromEngine() {
         let mode = talys_engine_get_layout_mode()
         self.layoutMode = switch mode {
-        case UInt8(TALYS_LAYOUT_MASTER_STACK): "MST"
-        case UInt8(TALYS_LAYOUT_MONOCLE): "MON"
-        default: "DWN"
+        case UInt8(TALYS_LAYOUT_MASTER_STACK): "Master-Stack"
+        case UInt8(TALYS_LAYOUT_MONOCLE): "Monocle"
+        default: "Dwindle"
         }
     }
 }
