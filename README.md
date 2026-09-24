@@ -25,6 +25,7 @@ It's meant to feel like a Linux tiling setup such as Hyprland, while running as 
 - **Active window borders.** Borders with rounded corners and a gradient show which window has focus, with smooth animations.
 - **Themes.** Catppuccin Mocha, Tokyo Night, Gruvbox, Rosé Pine and Nord are built in, or you can write your own. A theme recolors the bar, the launcher and the borders immediately.
 - **One config file.** Everything lives in a single TOML file that Talys reloads while it runs.
+- **Settings window.** Edit the config without touching TOML: click a shortcut and press new keys to rebind it. Changes apply instantly and your comments in the file are kept. Open it with `mod + shift + ,`, "Settings" in the launcher, or "Settings…" in the bar menu.
 - **Puts things back.** Any macOS setting Talys changes (Spotlight shortcut, menu bar, Mission Control keys) is restored when you quit.
 
 ## How it's built

@@ -18,6 +18,7 @@ public final class BarController: NSObject {
     public var onSelectTheme: ((String) -> Void)?
     /// Turns the Talys bar off and gives the macOS menu bar back.
     public var onRestoreMenuBar: (() -> Void)?
+    public var onOpenSettings: (() -> Void)?
     /// Looks up the live key binding for an action so menu hints match the real hotkeys.
     public var bindingProvider: ((KeyAction) -> KeyBinding?)?
 
@@ -217,6 +218,11 @@ public final class BarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(settingsClicked), keyEquivalent: "")
+        settingsItem.target = self
+        applyShortcut(for: .openSettings, to: settingsItem)
+        menu.addItem(settingsItem)
+
         let reloadItem = NSMenuItem(title: "Reload Config", action: #selector(reloadConfigClicked), keyEquivalent: "")
         reloadItem.target = self
         menu.addItem(reloadItem)
@@ -309,6 +315,10 @@ public final class BarController: NSObject {
         if let name = sender.representedObject as? String {
             onSelectTheme?(name)
         }
+    }
+
+    @objc private func settingsClicked() {
+        onOpenSettings?()
     }
 
     @objc private func reloadConfigClicked() {

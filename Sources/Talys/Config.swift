@@ -221,6 +221,7 @@ public enum ConfigManager {
             "cycle_column_width": "mod+w",
             "stack_left": "mod+comma",
             "stack_right": "mod+period",
+            "open_settings": "mod+shift+comma",
         ]
         for ws in 1...9 {
             map["switch_workspace_\(ws)"] = "mod+\(ws)"
@@ -254,6 +255,7 @@ public enum ConfigManager {
             "cycle_column_width": .cycleColumnWidth,
             "stack_left": .consumeOrExpel(0),
             "stack_right": .consumeOrExpel(3),
+            "open_settings": .openSettings,
         ]
         for ws in 1...9 {
             map["switch_workspace_\(ws)"] = .switchWorkspace(UInt8(ws))
@@ -295,7 +297,7 @@ gradient = true
 enabled = true              # Toggle at runtime with toggle_animations (mod+shift+a)
 duration_ms = 120.0
 
-# Any action left out here keeps its default bind.
+# Any action left out here keeps its default bind; set one to "" to unbind it.
 [keybindings]
 focus_left = "mod+h"
 focus_down = "mod+j"
@@ -322,6 +324,7 @@ toggle_scratchpad = "mod+s"
 move_to_scratchpad = "mod+shift+s"
 cycle_theme = "mod+shift+t"
 toggle_animations = "mod+shift+a"
+open_settings = "mod+shift+comma"
 
 # Scrolling layout: columns scroll sideways instead of shrinking; focus_*/swap_* move between columns.
 cycle_column_width = "mod+w"   # 1/3 → 1/2 → 2/3 of the screen
@@ -385,20 +388,25 @@ exec = "osascript -e 'tell application \\"Terminal\\" to do script \\"\\"' -e 't
             }
         }
 
-        guard let data = try? Data(contentsOf: url) else {
+        guard FileManager.default.fileExists(atPath: url.path) else {
             print("[Config] Using default configuration.")
             return TalysConfig()
         }
 
         do {
-            let decoder = TOMLDecoder()
-            let config = try decoder.decode(TalysConfig.self, from: data)
+            let config = try decodeConfig(at: url)
             print("[Config] Successfully loaded configuration from \(url.path)")
             return config
         } catch {
             print("[Config] Error parsing config.toml: \(error). Using defaults.")
             return TalysConfig()
         }
+    }
+
+    /// Like `loadConfig`, but surfaces read and parse errors instead of falling back to defaults.
+    public static func decodeConfig(at url: URL = configURL) throws -> TalysConfig {
+        let data = try Data(contentsOf: url)
+        return try TOMLDecoder().decode(TalysConfig.self, from: data)
     }
 
     @MainActor
@@ -464,7 +472,7 @@ exec = "osascript -e 'tell application \\"Terminal\\" to do script \\"\\"' -e 't
         }
 
         for (name, keyStr) in ordered {
-            guard let action = actionMap[name] else { continue }
+            guard let action = actionMap[name], !keyStr.isEmpty else { continue }
             guard let binding = parseKeyBinding(keyStr, mod: mod) else {
                 print("[Config] Could not parse key \"\(keyStr)\" for \(name).")
                 continue
@@ -472,7 +480,7 @@ exec = "osascript -e 'tell application \\"Terminal\\" to do script \\"\\"' -e 't
             insert(binding, action, owner: name, keyStr: keyStr)
         }
 
-        for entry in config.bind {
+        for entry in config.bind where !entry.keys.isEmpty {
             guard let binding = parseKeyBinding(entry.keys, mod: mod) else {
                 print("[Config] Could not parse key \"\(entry.keys)\" for exec bind.")
                 continue

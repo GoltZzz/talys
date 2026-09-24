@@ -20,6 +20,7 @@ public enum KeyAction: Sendable, CustomStringConvertible {
     case toggleAnimations
     case cycleColumnWidth
     case consumeOrExpel(UInt8)
+    case openSettings
 
     public var description: String {
         switch self {
@@ -41,6 +42,7 @@ public enum KeyAction: Sendable, CustomStringConvertible {
         case .toggleAnimations: return "toggleAnimations"
         case .cycleColumnWidth: return "cycleColumnWidth"
         case .consumeOrExpel(let d): return "consumeOrExpel(\(d))"
+        case .openSettings: return "openSettings"
         }
     }
 }
@@ -67,6 +69,10 @@ public final class KeyboardManager: @unchecked Sendable {
 
     public var onAction: (@Sendable (KeyAction) -> Void)?
     public var bindings: [KeyBinding: KeyAction] = [:]
+    /// While set, key presses go here instead of triggering bindings (the settings window's shortcut recorder).
+    public var captureHandler: (@MainActor (KeyBinding) -> Void)?
+    /// Key whose auto-repeats are swallowed after it was captured, so holding it doesn't fire its new binding.
+    private var capturedKeyCode: UInt16?
 
     public init() {
         setupDefaultBindings()
@@ -127,6 +133,17 @@ public final class KeyboardManager: @unchecked Sendable {
             cmd: isCmd,
             alt: isAlt
         )
+
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        if let capture = captureHandler {
+            if !isRepeat {
+                capturedKeyCode = keyCode
+                MainActor.assumeIsolated { capture(binding) }
+            }
+            return true
+        }
+        if isRepeat, keyCode == capturedKeyCode { return true }
+        capturedKeyCode = nil
 
         if let action = bindings[binding] {
             print("[KeyboardManager] Matched hotkey -> \(action) (keyCode: \(keyCode))")

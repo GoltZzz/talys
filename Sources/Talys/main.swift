@@ -57,8 +57,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     tc.cycleColumnWidth()
                 case .consumeOrExpel(let dir):
                     tc.consumeOrExpel(dir)
+                case .openSettings:
+                    SettingsWindowController.shared.show()
                 }
             }
+        }
+
+        SettingsWindowController.shared.configure(keyboard: keyboardManager) { [weak self] in
+            self?.reloadConfig()
         }
 
         SpotlightTakeover.shared.prepareOnLaunch()
@@ -87,6 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         bar.onSelectTheme = { [weak self] name in
             self?.selectTheme(name)
+        }
+        bar.onOpenSettings = {
+            SettingsWindowController.shared.show()
         }
         bar.onRestoreMenuBar = { [weak self] in
             self?.setMenuBarMode(.macos)
@@ -176,6 +185,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             .command("tiling", tc.isEnabled ? "Disable Tiling" : "Enable Tiling", subtitle: "Toggle the tiling engine", symbol: "power") {
                 tc.isEnabled.toggle()
+            },
+            .command("settings", "Settings", subtitle: "Keybindings, layout, window rules, bar and appearance", symbol: "gearshape.fill") {
+                SettingsWindowController.shared.show()
             },
             .command("reload", "Reload Config", subtitle: ConfigManager.configURL.path, symbol: "arrow.clockwise") { [weak self] in
                 self?.reloadConfig()
