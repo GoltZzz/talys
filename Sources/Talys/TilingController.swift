@@ -140,7 +140,7 @@ public final class TilingController {
         let cfg = barConfig ?? TilingController.shared.barConfig
         if cfg.enabled {
             let screenTop = primaryHeight - screen.frame.maxY
-            let barBottom = screenTop + cfg.margin_top + cfg.height
+            let barBottom = screenTop + BarController.coveredHeight(on: screen, config: cfg)
             axY = barBottom + cfg.gap - TilingController.shared.outerGap
         }
 

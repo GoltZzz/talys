@@ -9,8 +9,8 @@ public final class FloatingBarPanel: NSPanel {
             defer: false
         )
 
-        // Float at the status bar level across all spaces
-        self.level = .statusBar
+        // Float just above the macOS menu bar across all spaces, so its hover reveal slides in underneath
+        self.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         self.collectionBehavior = [
             .canJoinAllSpaces,
             .stationary,

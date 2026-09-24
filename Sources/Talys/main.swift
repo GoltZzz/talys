@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         SpotlightTakeover.shared.prepareOnLaunch()
 
-        let config = ConfigManager.loadConfig()
+        let config = withMenuBarChoice(ConfigManager.loadConfig())
         applyConfig(config)
 
         guard keyboardManager.start() else {
@@ -88,9 +88,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar.onSelectTheme = { [weak self] name in
             self?.selectTheme(name)
         }
-        bar.onToggleHideMenuBar = { hide in
-            MenuBarAutoHide.shared.apply(enabled: hide)
-            ConfigManager.persistHideMenuBar(hide)
+        bar.onRestoreMenuBar = { [weak self] in
+            self?.setMenuBarMode(.macos)
         }
         bar.onSwitchWorkspace = { ws in
             // Clicking the active workspace pill shouldn't bounce you elsewhere.
@@ -121,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func reloadConfig() {
-        let cfg = ConfigManager.loadConfig()
+        let cfg = withMenuBarChoice(ConfigManager.loadConfig())
         applyConfig(cfg)
         barController?.updateConfig(cfg.bar)
         print("[Talys] Configuration reloaded.")
@@ -131,8 +130,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ConfigManager.applyConfig(config, to: tilingController, keyboard: keyboardManager)
         SpotlightTakeover.shared.adjustBindings(&keyboardManager.bindings, config: config)
         MissionControlShortcuts.shared.sync(with: keyboardManager.bindings)
-        MenuBarAutoHide.shared.apply(enabled: config.bar.enabled && config.bar.hide_macos_menu_bar)
+        MenuBarAutoHide.shared.apply(enabled: config.bar.enabled)
         SystemMetricsService.shared.setClock12Hour(config.bar.clock_12h)
+    }
+
+    /// The Talys bar only shows when `bar.menu_bar` swaps it for the macOS menu bar.
+    private func withMenuBarChoice(_ config: TalysConfig) -> TalysConfig {
+        var config = config
+        if config.bar.enabled {
+            config.bar.enabled = MenuBarAutoHide.shared.resolve(config.bar.menu_bar) == .talys
+        }
+        return config
+    }
+
+    private func setMenuBarMode(_ mode: MenuBarAutoHide.Mode) {
+        ConfigManager.persistMenuBar(mode.rawValue)
+        reloadConfig()
     }
 
     private func selectTheme(_ name: String) {
@@ -170,6 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .command("edit", "Edit Config", subtitle: ConfigManager.configURL.path, symbol: "doc.text.fill") {
                 NSWorkspace.shared.open(ConfigManager.configURL)
             },
+            menuBarCommand(),
             spotlightCommand(),
         ]
         if let missionControl = missionControlCommand() {
@@ -181,6 +195,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
         ]
         return items
+    }
+
+    private func menuBarCommand() -> LauncherItem {
+        if MenuBarAutoHide.shared.isActive {
+            return .command("menubar", "Restore macOS Menu Bar", subtitle: "Turn off the Talys bar (menu_bar = \"macos\")", symbol: "menubar.rectangle") { [weak self] in
+                self?.setMenuBarMode(.macos)
+            }
+        }
+        return .command("menubar", "Use Talys Bar", subtitle: "Hides the macOS menu bar while Talys runs; restored on quit", symbol: "menubar.dock.rectangle") { [weak self] in
+            self?.setMenuBarMode(.talys)
+        }
     }
 
     private func spotlightCommand() -> LauncherItem {

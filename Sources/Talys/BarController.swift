@@ -6,6 +6,8 @@ import SwiftUI
 public final class BarController: NSObject {
     private var panel: FloatingBarPanel?
     private var hostingView: NSHostingView<TalysBarView>?
+    private var wallpaperView: WallpaperStripView?
+    private var wallpaperTimer: Timer?
     private var barConfig: BarConfig
 
     public var onToggleEnabled: ((Bool) -> Void)?
@@ -14,21 +16,23 @@ public final class BarController: NSObject {
     public var onSwitchWorkspace: ((UInt8) -> Void)?
     public var onCycleLayout: (() -> Void)?
     public var onSelectTheme: ((String) -> Void)?
-    public var onToggleHideMenuBar: ((Bool) -> Void)?
+    /// Turns the Talys bar off and gives the macOS menu bar back.
+    public var onRestoreMenuBar: (() -> Void)?
     /// Looks up the live key binding for an action so menu hints match the real hotkeys.
     public var bindingProvider: ((KeyAction) -> KeyBinding?)?
 
     public init(config: BarConfig = BarConfig()) {
         self.barConfig = config
         super.init()
+        setupObservers()
         if barConfig.enabled {
             setupPanel()
-            setupScreenChangeObserver()
         }
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     public func updateConfig(_ config: BarConfig) {
@@ -53,23 +57,30 @@ public final class BarController: NSObject {
         panel?.orderOut(nil)
     }
 
+    /// Height of the strip the bar's window covers, measured down from the screen's top edge: the bar itself,
+    /// or the macOS menu bar if that's taller (notched screens), so the menu bar's hover reveal stays hidden.
+    static func coveredHeight(on screen: NSScreen, config: BarConfig) -> CGFloat {
+        let menuBar = max(NSStatusBar.system.thickness, screen.safeAreaInsets.top)
+        return max(config.margin_top + config.height, menuBar)
+    }
+
+    private func panelRect(on screen: NSScreen) -> NSRect {
+        let frame = screen.frame
+        let height = Self.coveredHeight(on: screen, config: barConfig)
+        return NSRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height)
+    }
+
+    /// The bar's own area inside the panel, `margin_top` below the top edge.
+    private func barRect(in panelRect: NSRect) -> NSRect {
+        NSRect(x: 0, y: panelRect.height - barConfig.margin_top - barConfig.height,
+               width: panelRect.width, height: barConfig.height)
+    }
+
     private func setupPanel() {
         guard let screen = NSScreen.main else { return }
 
-        let screenFrame = screen.frame
-        let panelHeight = barConfig.height
-        let marginTop = barConfig.margin_top
-
-        // Top of screen in Cocoa coordinates (origin at bottom-left)
-        let panelY = screenFrame.origin.y + screenFrame.height - (marginTop + panelHeight)
-        let panelRect = NSRect(
-            x: screenFrame.origin.x,
-            y: panelY,
-            width: screenFrame.width,
-            height: panelHeight
-        )
-
-        let newPanel = FloatingBarPanel(contentRect: panelRect)
+        let rect = panelRect(on: screen)
+        let newPanel = FloatingBarPanel(contentRect: rect)
 
         let barView = TalysBarView(
             onSwitchWorkspace: { [weak self] ws in
@@ -89,33 +100,35 @@ public final class BarController: NSObject {
             }
         )
 
+        let container = NSView(frame: NSRect(origin: .zero, size: rect.size))
+        let wallpaper = WallpaperStripView(frame: container.bounds)
+        wallpaper.autoresizingMask = [.width, .height]
+        container.addSubview(wallpaper)
+
         let hosting = NSHostingView(rootView: barView)
-        hosting.autoresizingMask = [.width, .height]
-        newPanel.contentView = hosting
+        hosting.frame = barRect(in: rect)
+        hosting.autoresizingMask = [.width, .minYMargin]
+        container.addSubview(hosting)
+        newPanel.contentView = container
 
         self.panel = newPanel
         self.hostingView = hosting
+        self.wallpaperView = wallpaper
 
         newPanel.orderFrontRegardless()
-        print("[BarController] Talys floating bar panel displayed (height: \(panelHeight)pt)")
+        wallpaper.refresh()
+        print("[BarController] Talys floating bar panel displayed (height: \(barConfig.height)pt)")
     }
 
     private func updatePanelFrame() {
         guard let panel = panel, let screen = NSScreen.main else { return }
-        let screenFrame = screen.frame
-        let panelHeight = barConfig.height
-        let marginTop = barConfig.margin_top
-        let panelY = screenFrame.origin.y + screenFrame.height - (marginTop + panelHeight)
-        let panelRect = NSRect(
-            x: screenFrame.origin.x,
-            y: panelY,
-            width: screenFrame.width,
-            height: panelHeight
-        )
-        panel.setFrame(panelRect, display: true)
+        let rect = panelRect(on: screen)
+        panel.setFrame(rect, display: false)
+        hostingView?.frame = barRect(in: rect)
+        wallpaperView?.refresh()
     }
 
-    private func setupScreenChangeObserver() {
+    private func setupObservers() {
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
@@ -123,6 +136,22 @@ public final class BarController: NSObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.updatePanelFrame()
+            }
+        }
+        // Each Space can have its own wallpaper.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.wallpaperView?.refresh()
+            }
+        }
+        // macOS posts nothing public when the wallpaper changes, so check now and then.
+        wallpaperTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.wallpaperView?.refresh()
             }
         }
     }
@@ -144,9 +173,8 @@ public final class BarController: NSObject {
         toggleItem.target = self
         menu.addItem(toggleItem)
 
-        let menuBarItem = NSMenuItem(title: "Hide macOS Menu Bar", action: #selector(toggleHideMenuBarClicked), keyEquivalent: "")
+        let menuBarItem = NSMenuItem(title: "Restore macOS Menu Bar", action: #selector(restoreMenuBarClicked), keyEquivalent: "")
         menuBarItem.target = self
-        menuBarItem.state = barConfig.hide_macos_menu_bar ? .on : .off
         menu.addItem(menuBarItem)
 
         let retileItem = NSMenuItem(title: "Retile All", action: #selector(retileClicked), keyEquivalent: "")
@@ -219,7 +247,8 @@ public final class BarController: NSObject {
     }
 
     private func togglePopover(_ kind: BarPopover) {
-        let top = (panel?.frame.minY ?? NSScreen.main?.frame.maxY ?? 0) - 6
+        let barBottom = panel.map { $0.frame.maxY - barConfig.margin_top - barConfig.height }
+        let top = (barBottom ?? NSScreen.main?.frame.maxY ?? 0) - 6
         BarPopoverController.shared.toggle(kind, anchorX: NSEvent.mouseLocation.x, top: top, on: panel?.screen)
     }
 
@@ -259,9 +288,8 @@ public final class BarController: NSObject {
         onToggleEnabled?(newState)
     }
 
-    @objc private func toggleHideMenuBarClicked() {
-        barConfig.hide_macos_menu_bar.toggle()
-        onToggleHideMenuBar?(barConfig.hide_macos_menu_bar)
+    @objc private func restoreMenuBarClicked() {
+        onRestoreMenuBar?()
     }
 
     @objc private func retileClicked() {

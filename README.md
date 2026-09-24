@@ -19,7 +19,7 @@ It's meant to feel like a Linux tiling setup such as Hyprland, while running as 
 - **Automatic tiling.** New windows split the screen the way Hyprland's dwindle layout does. You can also switch to master-stack or monocle.
 - **Keyboard first.** Move focus, swap windows, resize splits, float and fullscreen, all from home-row keys.
 - **Workspaces.** Nine virtual workspaces that replace macOS desktops (Spaces), with per-app rules that send apps to their own workspace.
-- **Built-in status bar.** A themed bar at the top of the screen shows your workspaces, the time, battery, Wi-Fi and volume. The macOS menu bar hides while Talys runs.
+- **Built-in status bar.** A themed bar at the top of the screen shows your workspaces, the time, battery, Wi-Fi and volume. On first launch Talys asks whether to use it in place of the macOS menu bar, which it then hides and covers while Talys runs.
 - **Launcher.** Fuzzy-search your apps and Talys commands. It can take over `Cmd + Space` from Spotlight.
 - **Scratchpad.** Hide windows out of the way and bring them back over whatever workspace you're on.
 - **Active window borders.** Borders with rounded corners and a gradient show which window has focus, with smooth animations.
@@ -46,7 +46,7 @@ No. Talys workspaces take their place. If you have more than one desktop, Talys 
 If a macOS shortcut (such as a Mission Control one) uses the same keys as a Talys binding, Talys asks once whether to turn it off while Talys runs. It's turned back on when Talys quits.
 
 **My menu bar or Spotlight shortcut changed.**
-Talys hides the menu bar and can take over `Cmd + Space` while it runs. Both go back to how they were when you quit.
+If you chose the Talys bar, Talys sets the macOS menu bar to hide automatically while it runs, and it can take over `Cmd + Space`. Both go back to how they were when you quit. If you change the menu bar setting in System Settings while Talys runs, Talys keeps your change. After a force quit, run `talys --restore-shortcuts` to put them back. To switch, set `menu_bar` under `[bar]` in the config to `"talys"` or `"macos"`, or use "Use Talys Bar" / "Restore macOS Menu Bar" in the launcher. Set it to `"ask"` to see the prompt again.
 
 ## Status & Roadmap
 
