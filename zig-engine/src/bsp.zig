@@ -699,6 +699,21 @@ pub const BspEngine = struct {
         return true;
     }
 
+    /// Trades the places of two tiled windows, in the tree and the scrolling strip alike. Focus stays on `a`.
+    pub fn swapWindows(self: *BspEngine, a: WindowId, b: WindowId) bool {
+        if (a == b) return false;
+        const leaf_a = self.findLeafByWindow(a);
+        const leaf_b = self.findLeafByWindow(b);
+        if (leaf_a == null_node or leaf_b == null_node) return false;
+
+        self.nodes[leaf_a].data.leaf.window_id = b;
+        self.nodes[leaf_b].data.leaf.window_id = a;
+        self.strip.swapWindows(a, b);
+
+        self.focused_window = a;
+        return true;
+    }
+
     /// True when every tiled window gets at least its minimum size. Scrolling, monocle and fullscreen never
     /// squeeze windows, so they always fit.
     pub fn allFit(self: *BspEngine, screen_rect: Rect, gaps: GapConfig, mins: *const MinSizes) bool {
@@ -815,6 +830,42 @@ test "BspEngine focus and swap directional" {
 
     const swapped = engine.swapDirection(.left, screen, gaps, &MinSizes.empty);
     try std.testing.expect(swapped);
+}
+
+test "BspEngine swapWindows trades tiles" {
+    var engine = BspEngine.init();
+    engine.addWindow(1);
+    engine.addWindow(2);
+    engine.addWindow(3);
+
+    const screen = Rect{ .x = 0, .y = 0, .width = 1000, .height = 500 };
+    const gaps = GapConfig{ .inner = 10, .outer = 10 };
+    var ids: [10]WindowId = undefined;
+    var before: [10]Rect = undefined;
+    _ = engine.calculateLayout(screen, gaps, &MinSizes.empty, 10, &ids, &before);
+
+    try std.testing.expect(engine.swapWindows(1, 3));
+    try std.testing.expect(!engine.swapWindows(1, 1));
+    try std.testing.expectEqual(@as(?WindowId, 1), engine.getFocus());
+
+    var after_ids: [10]WindowId = undefined;
+    var after: [10]Rect = undefined;
+    const n = engine.calculateLayout(screen, gaps, &MinSizes.empty, 10, &after_ids, &after);
+    for (0..n) |i| {
+        const want: WindowId = switch (ids[i]) {
+            1 => 3,
+            3 => 1,
+            else => ids[i],
+        };
+        for (0..n) |j| {
+            if (after_ids[j] == want) try std.testing.expectEqual(before[i].x, after[j].x);
+        }
+    }
+
+    const p1 = engine.strip.find(1).?;
+    const p3 = engine.strip.find(3).?;
+    try std.testing.expectEqual(@as(usize, 2), p1.col);
+    try std.testing.expectEqual(@as(usize, 0), p3.col);
 }
 
 test "BspEngine floating and fullscreen" {

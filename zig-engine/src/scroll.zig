@@ -119,6 +119,14 @@ pub const ScrollStrip = struct {
         return col.windows[@intCast(r)];
     }
 
+    /// Trades the slots of two windows, wherever they sit in the strip.
+    pub fn swapWindows(self: *ScrollStrip, a: WindowId, b: WindowId) void {
+        const pa = self.find(a) orelse return;
+        const pb = self.find(b) orelse return;
+        self.columns[pa.col].windows[pa.row] = b;
+        self.columns[pb.col].windows[pb.row] = a;
+    }
+
     /// Swaps the focused column with its neighbour (dx) or the window with the one above/below it (dy).
     pub fn move(self: *ScrollStrip, wid: WindowId, dx: i8, dy: i8) bool {
         const pos = self.find(wid) orelse return false;

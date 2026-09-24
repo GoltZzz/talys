@@ -130,6 +130,19 @@ struct AudioPanelView: View {
                 .background(Palette.surface0.opacity(0.6), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .buttonStyle(.plain)
+        } else if meter.pausedForBluetooth {
+            HStack(spacing: 6) {
+                Image(systemName: "headphones").font(.system(size: 9))
+                Text("Level meter off for Bluetooth mics to keep audio quality")
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer()
+            }
+            .foregroundStyle(Palette.subtext0)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Palette.surface0.opacity(0.6), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else {
             SegmentMeter(level: meter.level, peak: meter.peak, dimmed: state.isInputMuted)
         }

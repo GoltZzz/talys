@@ -85,6 +85,15 @@ pub export fn talys_engine_swap_direction(direction: u8, screen_rect: Rect) bool
     return global_workspaces.getActiveEngine().swapDirection(dir, screen_rect, global_gaps, &global_mins);
 }
 
+/// Swaps two tiled windows on whichever workspace holds both.
+pub export fn talys_engine_swap_windows(a: WindowId, b: WindowId) bool {
+    if (!is_initialized) return false;
+    const ws = global_workspaces.findWorkspaceForWindow(a) orelse return false;
+    if (global_workspaces.findWorkspaceForWindow(b) != ws) return false;
+    const engine = global_workspaces.getEngine(ws) orelse return false;
+    return engine.swapWindows(a, b);
+}
+
 pub export fn talys_engine_resize_focused(delta: f64) void {
     if (!is_initialized) return;
     global_workspaces.getActiveEngine().resizeFocused(delta);

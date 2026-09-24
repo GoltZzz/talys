@@ -48,6 +48,7 @@ TalysWindowId talys_engine_get_focus(void);
 TalysWindowId talys_engine_focus_direction(uint8_t direction, TalysRect screen_rect);
 
 bool talys_engine_swap_direction(uint8_t direction, TalysRect screen_rect);
+bool talys_engine_swap_windows(TalysWindowId a, TalysWindowId b);
 void talys_engine_resize_focused(double delta);
 bool talys_engine_toggle_float(TalysWindowId wid);
 bool talys_engine_is_floating(TalysWindowId wid);

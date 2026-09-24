@@ -58,6 +58,11 @@ public final class TilingController {
     private var pendingFollow: UInt8?
     /// True while picking up windows that were already open (startup, retile); those never take the view along.
     private var adoptingExisting = false
+    /// The tiled window under the cursor when the left button went down, and its frame then; checked on
+    /// release to tell a title-bar drag from a plain click.
+    private var pressedTile: (wid: TalysWindowId, frame: CGRect)?
+    /// How long after the button comes up to read the dropped window's frame; apps report AX moves a beat late.
+    private static let dropReadDelay: TimeInterval = 0.05
 
     public var onWorkspaceChanged: ((UInt8) -> Void)?
     public var barConfig: BarConfig = BarConfig()
@@ -98,6 +103,9 @@ public final class TilingController {
             queue: .main
         ) { _ in
             MainActor.assumeIsolated { TilingController.shared.repark() }
+        }
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+            MainActor.assumeIsolated { TilingController.shared.handleMouse(event.type) }
         }
     }
 
@@ -881,6 +889,73 @@ public final class TilingController {
             learnMinSize(wid, actual: after.size, requested: target.size)
             keepOnScreen(element: element, record: record, actual: after, target: target)
         }
+    }
+
+    // MARK: - Drag and drop
+
+    private func handleMouse(_ type: NSEvent.EventType) {
+        guard isActive else { return }
+        let point = Self.axPoint(NSEvent.mouseLocation)
+        switch type {
+        case .leftMouseDown:
+            pressedTile = nil
+            guard let (wid, _) = layoutTargets.first(where: { $0.value.contains(point) }),
+                  let record = record(for: wid),
+                  let frame = AccessibilityHelper.getFrame(for: record.element) else { return }
+            pressedTile = (wid, frame)
+        case .leftMouseUp:
+            let pressed = pressedTile
+            pressedTile = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.dropReadDelay) {
+                MainActor.assumeIsolated { TilingController.shared.windowDropped(pressed: pressed, at: point) }
+            }
+        default:
+            break
+        }
+    }
+
+    /// The left button came up. A tiled window that was dragged (moved, same size) swaps with the tile it was
+    /// dropped on, or goes back to its own tile when dropped anywhere else. A floating window stays where it
+    /// landed, unless that's under the bar.
+    private func windowDropped(pressed: (wid: TalysWindowId, frame: CGRect)?, at point: CGPoint) {
+        guard isActive else { return }
+
+        if let pressed, let record = record(for: pressed.wid), layoutTargets[pressed.wid] != nil,
+           !WindowAnimator.shared.isAnimating(record.element),
+           let now = AccessibilityHelper.getFrame(for: record.element),
+           max(abs(now.minX - pressed.frame.minX), abs(now.minY - pressed.frame.minY)) >= 2,
+           max(abs(now.width - pressed.frame.width), abs(now.height - pressed.frame.height)) < 1 {
+            // Monocle and fullscreen stack every tile in the same spot, so there's nothing to swap with.
+            let stacked = talys_engine_is_fullscreen() || talys_engine_get_layout_mode() == UInt8(TALYS_LAYOUT_MONOCLE)
+            if !stacked,
+               let (target, _) = layoutTargets.first(where: { $0.key != pressed.wid && $0.value.contains(point) }),
+               talys_engine_swap_windows(pressed.wid, target) {
+                print("[TilingController] Dropped window [ID \(pressed.wid)] onto [ID \(target)]; swapped")
+            }
+            applyLayout()
+            return
+        }
+
+        guard let front = AccessibilityHelper.getFocusedWindow(), let record = findRecord(for: front.element),
+              layoutTargets[record.id] == nil, !parked.contains(record.id),
+              let frame = AccessibilityHelper.getFrame(for: front.element) else { return }
+        let r = Self.getAxScreenRect()
+        let top = r.y + outerGap
+        if frame.minY < top {
+            AccessibilityHelper.setPosition(for: front.element, to: CGPoint(x: frame.minX, y: top))
+        }
+    }
+
+    private func record(for wid: TalysWindowId) -> WindowRecord? {
+        lock.lock()
+        defer { lock.unlock() }
+        return windowMap[wid]
+    }
+
+    /// Cocoa screen point (y up from the primary screen's bottom) to AX coordinates (y down from its top).
+    private static func axPoint(_ p: NSPoint) -> CGPoint {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return CGPoint(x: p.x, y: primaryHeight - p.y)
     }
 
     /// Until the relayout that makes room for it, a window stuck at its minimum size may hang off the screen

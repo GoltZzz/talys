@@ -93,6 +93,12 @@ public final class AudioController {
     public func toggleInputMute() { setMuted(!TalysDesktopState.shared.isInputMuted, on: input) }
     public func selectInput(_ id: AudioDeviceID) { setDefault(id, for: .input) }
 
+    /// Opening a Bluetooth mic forces the headset from A2DP into the low-quality HFP call profile.
+    public static func defaultInputIsBluetooth() -> Bool {
+        let id = defaultDevice(.input)
+        return id != 0 && transport(of: id) == .bluetooth
+    }
+
     // MARK: - Shared implementation
 
     private func setVolume(_ value: Float, on endpoint: Endpoint) {
@@ -161,6 +167,7 @@ public final class AudioController {
         }
         refreshDevices()
         refreshLevels(endpoint)
+        if endpoint.direction == .input { InputLevelMeter.shared.inputDeviceChanged() }
     }
 
     private func refreshLevels(_ endpoint: Endpoint) {
@@ -316,8 +323,17 @@ public final class AudioController {
             var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
             guard AudioObjectGetPropertyData(id, &nameAddress, 0, nil, &nameSize, &name) == noErr,
                   let cfName = name?.takeRetainedValue() else { return nil }
+            // CoreAudio's per-process aggregates (e.g. AVAudioEngine's) aren't real devices.
+            if isHidden(id) || (cfName as String).hasPrefix("CADefaultDeviceAggregate") { return nil }
             return AudioDevice(id: id, name: cfName as String, transport: transport(of: id))
         }
+    }
+
+    private static func isHidden(_ id: AudioDeviceID) -> Bool {
+        var address = address(kAudioDevicePropertyIsHidden)
+        var hidden: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(id, &address, 0, nil, &size, &hidden) == noErr && hidden != 0
     }
 
     private static func transport(of id: AudioDeviceID) -> AudioDevice.Transport {

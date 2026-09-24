@@ -14,6 +14,8 @@ final class InputLevelMeter {
     /// Recent peak that holds briefly, then falls back toward the level.
     private(set) var peak: Float = 0
     private(set) var access: Access = .unknown
+    /// True while the default mic is Bluetooth: metering it would drop the headset into call-quality audio.
+    private(set) var pausedForBluetooth = false
 
     @ObservationIgnored private var engine: AVAudioEngine?
     @ObservationIgnored private var configObserver: NSObjectProtocol?
@@ -49,8 +51,19 @@ final class InputLevelMeter {
         peak = 0
     }
 
+    /// Re-evaluates the meter after the default input device changes.
+    func inputDeviceChanged() {
+        if running, access == .granted { startEngine() }
+    }
+
     private func startEngine() {
         stopEngine()
+        pausedForBluetooth = AudioController.defaultInputIsBluetooth()
+        if pausedForBluetooth {
+            level = 0
+            peak = 0
+            return
+        }
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
