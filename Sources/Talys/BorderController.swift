@@ -22,6 +22,56 @@ public final class BorderController {
         ThemeManager.shared.onThemeChanged = { [weak self] _ in
             self?.applyColors()
         }
+        // macOS barely sends AX move events during a live drag, so follow the mouse instead.
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { event in
+            MainActor.assumeIsolated { BorderController.shared.handleMouse(event.type) }
+        }
+    }
+
+    /// Where the target and the mouse were when the button went down; `moving` once the drag turned out to
+    /// move the window (not resize it or select text in it).
+    private var drag: (element: AXUIElement, frame: CGRect, mouse: CGPoint, moving: Bool)?
+
+    private func handleMouse(_ type: NSEvent.EventType) {
+        let mouse = NSEvent.mouseLocation
+        switch type {
+        case .leftMouseDown:
+            drag = nil
+            seedDrag(mouse)
+        case .leftMouseDragged:
+            expected = nil
+            // Clicking an unfocused window moves the border to it only after the button went down.
+            if let target, let current = drag, !current.moving, !CFEqual(current.element, target) {
+                seedDrag(mouse)
+            }
+            guard var drag else { return refresh() }
+            if !drag.moving {
+                // AX answers a beat late, so only use it to learn that the window is being moved.
+                guard let target, let now = AccessibilityHelper.getFrame(for: target),
+                      now.origin != drag.frame.origin, abs(now.width - drag.frame.width) < 1,
+                      abs(now.height - drag.frame.height) < 1 else { return refresh() }
+                drag.moving = true
+                self.drag = drag
+            }
+            // The window server moves the window exactly with the cursor; Cocoa's y axis points up, AX's down.
+            let frame = drag.frame.offsetBy(dx: mouse.x - drag.mouse.x, dy: drag.mouse.y - mouse.y)
+            guard config.enabled, TalysDesktopState.shared.isTilingEnabled else { return hide() }
+            show(axFrame: frame)
+        case .leftMouseUp:
+            drag = nil
+            refresh()
+            // Catch the window's settled frame (a tiling snap-back, or an app that reports late).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                MainActor.assumeIsolated { self?.refresh() }
+            }
+        default:
+            break
+        }
+    }
+
+    private func seedDrag(_ mouse: CGPoint) {
+        guard let target, let frame = AccessibilityHelper.getFrame(for: target) else { return }
+        drag = (target, frame, mouse, false)
     }
 
     public func updateConfig(_ config: BordersConfig) {
@@ -101,7 +151,14 @@ public final class BorderController {
         ).insetBy(dx: -width, dy: -width)
 
         if cocoaFrame != lastFrame {
+            let resized = cocoaFrame.size != lastFrame.size
             lastFrame = cocoaFrame
+            // A pure move (dragging) only needs the window shifted; skip rebuilding the layers.
+            guard resized else {
+                window.setFrameOrigin(cocoaFrame.origin)
+                if !window.isVisible { window.orderFrontRegardless() }
+                return
+            }
             window.setFrame(cocoaFrame, display: false)
 
             CATransaction.begin()
