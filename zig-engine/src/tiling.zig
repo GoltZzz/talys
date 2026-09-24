@@ -199,6 +199,12 @@ pub export fn talys_engine_find_room(wid: WindowId, after: u8, skip: u8, screen_
     return global_workspaces.findRoom(wid, after, skip, screen_rect, global_gaps, &global_mins);
 }
 
+/// Workspace holding `wid`, or 0 when the engine doesn't know it.
+pub export fn talys_engine_get_window_workspace(wid: WindowId) u8 {
+    if (!is_initialized) return 0;
+    return global_workspaces.findWorkspaceForWindow(wid) orelse 0;
+}
+
 pub export fn talys_engine_get_workspace_window_count(ws: u8) usize {
     if (!is_initialized) return 0;
     return global_workspaces.getWorkspaceWindowCount(ws);

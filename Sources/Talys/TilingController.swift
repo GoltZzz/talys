@@ -58,6 +58,8 @@ public final class TilingController {
     private var pendingFollow: UInt8?
     /// True while picking up windows that were already open (startup, retile); those never take the view along.
     private var adoptingExisting = false
+    /// During a retile, the workspace each window was on before the engine reset, so it goes back there.
+    private var retileHomes: [(element: AXUIElement, workspace: UInt8)] = []
     /// The tiled window under the cursor when the left button went down, and its frame then; checked on
     /// release to tell a title-bar drag from a plain click.
     private var pressedTile: (wid: TalysWindowId, frame: CGRect)?
@@ -253,9 +255,10 @@ public final class TilingController {
         applyRememberedMinSize(wid, pid: pid)
 
         let currentWs = talys_engine_get_active_workspace()
-        var targetWs = matchedRule?.workspace ?? currentWs
+        let home = retileHomes.first { CFEqual($0.element, element) }?.workspace
+        var targetWs = home ?? matchedRule?.workspace ?? currentWs
         // A rule's workspace that's already full cascades on to the next one with room.
-        if targetWs != currentWs, overflowToWorkspace, !talys_engine_fits_on_workspace(wid, targetWs, Self.getAxScreenRect()) {
+        if home == nil, targetWs != currentWs, overflowToWorkspace, !talys_engine_fits_on_workspace(wid, targetWs, Self.getAxScreenRect()) {
             let room = talys_engine_find_room(wid, targetWs, 0, Self.getAxScreenRect())
             if room != 0 {
                 print("[TilingController] Workspace \(targetWs) is full; window [ID \(wid)] goes to \(room) instead")
@@ -622,7 +625,12 @@ public final class TilingController {
         // back on screen so they're re-adopted here instead of stranded in the parking lot.
         lock.lock()
         let stranded = parked.filter { !scratchpad.contains($0) }.compactMap { windowMap[$0] }
+        retileHomes = windowMap.values.compactMap { record in
+            let ws = talys_engine_get_window_workspace(record.id)
+            return ws == 0 ? nil : (element: record.element, workspace: ws)
+        }
         lock.unlock()
+        let activeWs = talys_engine_get_active_workspace()
         for (i, record) in stranded.enumerated() {
             AccessibilityHelper.setFrame(for: record.element, frame: scratchpadFrame(index: i))
         }
@@ -632,6 +640,10 @@ public final class TilingController {
 
         lock.lock()
         talys_engine_reset()
+        // The reset jumps back to workspace 1; stay where the user is (the workspaces are all empty now).
+        var noHide = TalysWindowId(0), noShow = TalysWindowId(0)
+        var counts = TalysSwitchResult(hide_count: 0, show_count: 0)
+        _ = talys_engine_switch_workspace(activeWs, &noHide, 0, &noShow, 0, &counts)
         // Scratchpad windows aren't in the engine; keep their records (and IDs) so they stay stashed.
         windowMap = windowMap.filter { scratchpad.contains($0.key) }
         lock.unlock()
@@ -643,6 +655,7 @@ public final class TilingController {
             addWindow(element: w.element, pid: w.pid, title: w.title)
         }
         adoptingExisting = false
+        retileHomes = []
 
         if let focused = AccessibilityHelper.getFocusedWindow() {
             setFocusedWindow(element: focused.element)

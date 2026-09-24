@@ -90,6 +90,8 @@ bool talys_engine_fits_on_workspace(TalysWindowId wid, uint8_t ws, TalysRect scr
 // First workspace after `after` (wrapping, skipping `after` and `skip`) where the window fits; 0 if none.
 uint8_t talys_engine_find_room(TalysWindowId wid, uint8_t after, uint8_t skip, TalysRect screen_rect);
 size_t talys_engine_get_workspace_window_count(uint8_t ws);
+// Workspace holding the window, or 0 if the engine doesn't know it.
+uint8_t talys_engine_get_window_workspace(TalysWindowId wid);
 
 #ifdef __cplusplus
 }
