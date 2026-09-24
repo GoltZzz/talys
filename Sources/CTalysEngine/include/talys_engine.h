@@ -32,6 +32,7 @@ typedef uint32_t TalysWindowId;
 #define TALYS_LAYOUT_MASTER_STACK 1
 #define TALYS_LAYOUT_MONOCLE      2
 #define TALYS_LAYOUT_SCROLLING    3
+#define TALYS_LAYOUT_SMART        4
 
 void talys_engine_init(void);
 void talys_engine_reset(void);
@@ -42,6 +43,9 @@ void talys_engine_add_window(TalysWindowId wid);
 void talys_engine_remove_window(TalysWindowId wid);
 bool talys_engine_has_window(TalysWindowId wid);
 void talys_engine_set_min_size(TalysWindowId wid, double width, double height);
+// Smart layout preferences: preferred width / height and useful maximum width (0 = none), and the window's
+// share of the screen relative to others (1 = normal).
+void talys_engine_set_window_prefs(TalysWindowId wid, double aspect, double max_width, double weight);
 
 void talys_engine_set_focus(TalysWindowId wid);
 TalysWindowId talys_engine_get_focus(void);
@@ -58,6 +62,19 @@ bool talys_engine_is_fullscreen(void);
 void talys_engine_cycle_layout(void);
 uint8_t talys_engine_get_layout_mode(void);
 void talys_engine_set_layout_mode(uint8_t mode);
+// Puts every workspace in `mode`, and keeps it as the layout they go back to on a reset.
+void talys_engine_set_default_layout_mode(uint8_t mode);
+
+typedef struct {
+    double cost;
+    double baseline_cost;
+    uint32_t evaluated;
+    uint32_t searches;
+    bool changed;
+} TalysSmartStats;
+
+// How the active workspace's last Smart search went.
+void talys_engine_get_smart_stats(TalysSmartStats *out);
 
 void talys_engine_cycle_column_width(void);
 bool talys_engine_consume_or_expel(uint8_t direction);
@@ -68,6 +85,8 @@ int talys_engine_calculate_layout(
     TalysWindowId *out_ids,
     TalysRect *out_rects
 );
+// Newest tiled window on the active workspace that can't get its minimum size; 0 when everything fits.
+TalysWindowId talys_engine_find_overflow(TalysRect screen_rect);
 
 typedef struct {
     size_t hide_count;

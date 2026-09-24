@@ -3,7 +3,7 @@ const geometry = @import("geometry.zig");
 const constraints = @import("constraints.zig");
 const Rect = geometry.Rect;
 const GapConfig = geometry.GapConfig;
-const MinSizes = constraints.MinSizes;
+const WindowHints = constraints.WindowHints;
 
 pub const WindowId = constraints.WindowId;
 pub const MAX_COLUMNS: usize = 128;
@@ -198,7 +198,7 @@ pub const ScrollStrip = struct {
         self: *ScrollStrip,
         screen_rect: Rect,
         gaps: GapConfig,
-        mins: *const MinSizes,
+        mins: *const WindowHints,
         focused: ?WindowId,
         max_count: usize,
         out_ids: [*]WindowId,
@@ -274,7 +274,7 @@ test "ScrollStrip scrolls to the focused column" {
 
     var ids: [8]WindowId = undefined;
     var rects: [8]Rect = undefined;
-    const mins = MinSizes{};
+    const mins = WindowHints{};
 
     _ = strip.layout(test_screen, test_gaps, &mins, 1, 8, &ids, &rects);
     try std.testing.expectEqual(@as(f64, 0), rects[0].x);
@@ -289,7 +289,7 @@ test "ScrollStrip scrolls to the focused column" {
 test "ScrollStrip columns honour minimum widths" {
     var strip = ScrollStrip{};
     strip.insertColumn(0, 1);
-    var mins = MinSizes{};
+    var mins = WindowHints{};
     mins.set(1, .{ .width = 700 });
 
     var ids: [8]WindowId = undefined;

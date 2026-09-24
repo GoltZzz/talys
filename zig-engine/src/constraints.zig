@@ -12,53 +12,87 @@ pub const Size = struct {
 /// squeezed into a sliver it can't actually shrink to, where it ends up hidden behind its neighbour.
 pub const min_tile = Size{ .width = 300, .height = 150 };
 
-/// Smallest size each window's app accepts, as learned by the host (0 = unknown / no limit).
-pub const MinSizes = struct {
+/// Layout preferences for one window, which the Smart layout scores arrangements against.
+pub const Prefs = struct {
+    /// Preferred width ÷ height; 0 = none.
+    aspect: f64 = 0,
+    /// Width past which the window just wastes space; 0 = none.
+    max_width: f64 = 0,
+    /// Share of the screen relative to other windows.
+    weight: f64 = 1,
+};
+
+/// What the host knows about each window: the smallest size its app accepts (0 = unknown / no limit) and its
+/// layout preferences.
+pub const WindowHints = struct {
     ids: [MAX_ENTRIES]WindowId = undefined,
     sizes: [MAX_ENTRIES]Size = undefined,
+    prefs: [MAX_ENTRIES]Prefs = undefined,
     count: usize = 0,
+    /// Bumped on every change, so a layout can tell it was arranged with hints that have since changed.
+    version: u32 = 0,
 
-    pub const empty = MinSizes{};
+    pub const empty = WindowHints{};
 
-    pub fn reset(self: *MinSizes) void {
+    pub fn reset(self: *WindowHints) void {
         self.count = 0;
+        self.version +%= 1;
     }
 
-    pub fn get(self: *const MinSizes, wid: WindowId) Size {
+    fn find(self: *const WindowHints, wid: WindowId) ?usize {
         for (0..self.count) |i| {
-            if (self.ids[i] == wid) return self.sizes[i];
+            if (self.ids[i] == wid) return i;
         }
-        return .{};
+        return null;
+    }
+
+    /// The window's entry, created with no hints when it has none yet.
+    fn slot(self: *WindowHints, wid: WindowId) ?usize {
+        if (self.find(wid)) |i| return i;
+        if (self.count >= MAX_ENTRIES) return null;
+        const i = self.count;
+        self.ids[i] = wid;
+        self.sizes[i] = .{};
+        self.prefs[i] = .{};
+        self.count += 1;
+        return i;
+    }
+
+    pub fn get(self: *const WindowHints, wid: WindowId) Size {
+        return if (self.find(wid)) |i| self.sizes[i] else .{};
     }
 
     /// The window's minimum, raised to `min_tile`: what a tile must give it.
-    pub fn tile(self: *const MinSizes, wid: WindowId) Size {
+    pub fn tile(self: *const WindowHints, wid: WindowId) Size {
         const m = self.get(wid);
         return .{ .width = @max(m.width, min_tile.width), .height = @max(m.height, min_tile.height) };
     }
 
-    pub fn set(self: *MinSizes, wid: WindowId, size: Size) void {
-        for (0..self.count) |i| {
-            if (self.ids[i] == wid) {
-                self.sizes[i] = size;
-                return;
-            }
-        }
-        if (self.count >= MAX_ENTRIES) return;
-        self.ids[self.count] = wid;
-        self.sizes[self.count] = size;
-        self.count += 1;
+    pub fn set(self: *WindowHints, wid: WindowId, size: Size) void {
+        const i = self.slot(wid) orelse return;
+        if (std.meta.eql(self.sizes[i], size)) return;
+        self.sizes[i] = size;
+        self.version +%= 1;
     }
 
-    pub fn remove(self: *MinSizes, wid: WindowId) void {
-        for (0..self.count) |i| {
-            if (self.ids[i] == wid) {
-                self.count -= 1;
-                self.ids[i] = self.ids[self.count];
-                self.sizes[i] = self.sizes[self.count];
-                return;
-            }
-        }
+    pub fn getPrefs(self: *const WindowHints, wid: WindowId) Prefs {
+        return if (self.find(wid)) |i| self.prefs[i] else .{};
+    }
+
+    pub fn setPrefs(self: *WindowHints, wid: WindowId, prefs: Prefs) void {
+        const i = self.slot(wid) orelse return;
+        if (std.meta.eql(self.prefs[i], prefs)) return;
+        self.prefs[i] = prefs;
+        self.version +%= 1;
+    }
+
+    pub fn remove(self: *WindowHints, wid: WindowId) void {
+        const i = self.find(wid) orelse return;
+        self.count -= 1;
+        self.ids[i] = self.ids[self.count];
+        self.sizes[i] = self.sizes[self.count];
+        self.prefs[i] = self.prefs[self.count];
+        self.version +%= 1;
     }
 };
 
@@ -110,8 +144,8 @@ pub fn distribute(total: f64, gap: f64, mins: []const f64, out: []f64) bool {
     return true;
 }
 
-test "MinSizes set, get, remove" {
-    var mins = MinSizes{};
+test "WindowHints set, get, remove" {
+    var mins = WindowHints{};
     mins.set(1, .{ .width = 500, .height = 300 });
     mins.set(2, .{ .width = 200 });
     try std.testing.expectEqual(@as(f64, 500), mins.get(1).width);

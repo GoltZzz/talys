@@ -10,16 +10,17 @@ struct GeneralPane: View {
         let s = SettingsSection.general
         SettingsPage(title: s.title, subtitle: s.subtitle, symbol: s.symbol) {
             SettingsCard(title: "Layout", footer: "Cycle through them any time with the Cycle Layout shortcut.") {
-                // Four across when there's room, otherwise two by two; never three and an orphan.
+                // All in a row when there's room, otherwise three over two.
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) {
-                        ForEach(LayoutGeometry.all, id: \.value) { layoutCard($0).frame(minWidth: 140) }
+                        ForEach(LayoutGeometry.all, id: \.value) { layoutCard($0).frame(minWidth: 130) }
                     }
                     Grid(horizontalSpacing: 10, verticalSpacing: 10) {
-                        ForEach([0, 2], id: \.self) { row in
+                        ForEach(Array(stride(from: 0, to: LayoutGeometry.all.count, by: 3)), id: \.self) { row in
                             GridRow {
-                                layoutCard(LayoutGeometry.all[row])
-                                layoutCard(LayoutGeometry.all[row + 1])
+                                ForEach(row..<min(row + 3, LayoutGeometry.all.count), id: \.self) { i in
+                                    layoutCard(LayoutGeometry.all[i])
+                                }
                             }
                         }
                     }

@@ -7,8 +7,9 @@ public struct WindowRulesMatcher: Sendable {
         self.rules = rules
     }
 
-    public func match(appName: String?, windowTitle: String?) -> WindowRule? {
-        for rule in rules {
+    /// Every rule that applies to the window, in config order.
+    public func matches(appName: String?, windowTitle: String?) -> [WindowRule] {
+        rules.filter { rule in
             var appMatches = true
             var titleMatches = true
 
@@ -28,10 +29,7 @@ public struct WindowRulesMatcher: Sendable {
                 }
             }
 
-            if (rule.app != nil || rule.title != nil) && appMatches && titleMatches {
-                return rule
-            }
+            return (rule.app != nil || rule.title != nil) && appMatches && titleMatches
         }
-        return nil
     }
 }

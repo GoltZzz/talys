@@ -272,6 +272,9 @@ final class SettingsModel {
             if !title.isEmpty { entry.append(("title", .string(title))) }
             if let floating = rule.floating { entry.append(("floating", .bool(floating))) }
             if let workspace = rule.workspace { entry.append(("workspace", .int(Int(workspace)))) }
+            if let aspect = rule.aspect { entry.append(("aspect", .string(aspect))) }
+            if let maxWidth = rule.max_width { entry.append(("max_width", .double(maxWidth))) }
+            if let weight = rule.weight { entry.append(("weight", .double(weight))) }
             return entry
         }
         write { $0.replaceArray("window_rules", with: entries) }

@@ -3,6 +3,7 @@ const geometry = @import("geometry.zig");
 const bsp = @import("bsp.zig");
 const workspace = @import("workspace.zig");
 const constraints = @import("constraints.zig");
+const smart = @import("smart.zig");
 
 pub const Rect = geometry.Rect;
 pub const GapConfig = geometry.GapConfig;
@@ -10,10 +11,11 @@ pub const WindowId = bsp.WindowId;
 pub const Direction = bsp.Direction;
 pub const LayoutMode = bsp.LayoutMode;
 pub const SwitchCounts = workspace.SwitchCounts;
+pub const SmartStats = smart.Stats;
 
 var global_workspaces: workspace.WorkspaceManager = undefined;
 var global_gaps: GapConfig = GapConfig{};
-var global_mins: constraints.MinSizes = .{};
+var global_mins: constraints.WindowHints = .{};
 var is_initialized: bool = false;
 
 pub export fn talys_engine_init() void {
@@ -54,6 +56,13 @@ pub export fn talys_engine_remove_window(wid: WindowId) void {
 pub export fn talys_engine_set_min_size(wid: WindowId, width: f64, height: f64) void {
     if (!is_initialized) talys_engine_init();
     global_mins.set(wid, .{ .width = width, .height = height });
+}
+
+/// Smart layout preferences: preferred width ÷ height and useful maximum width (0 = none), and the window's
+/// share of the screen relative to others (1 = normal).
+pub export fn talys_engine_set_window_prefs(wid: WindowId, aspect: f64, max_width: f64, weight: f64) void {
+    if (!is_initialized) talys_engine_init();
+    global_mins.setPrefs(wid, .{ .aspect = @max(0.0, aspect), .max_width = @max(0.0, max_width), .weight = if (weight > 0) weight else 1 });
 }
 
 pub export fn talys_engine_has_window(wid: WindowId) bool {
@@ -131,9 +140,30 @@ pub export fn talys_engine_get_layout_mode() u8 {
 
 pub export fn talys_engine_set_layout_mode(mode: u8) void {
     if (!is_initialized) return;
-    if (mode <= 3) {
-        global_workspaces.getActiveEngine().layout_mode = @enumFromInt(mode);
+    if (mode <= 4) {
+        global_workspaces.getActiveEngine().setLayoutMode(@enumFromInt(mode));
     }
+}
+
+/// Puts every workspace in `mode`, and keeps it as the layout they go back to on a reset.
+pub export fn talys_engine_set_default_layout_mode(mode: u8) void {
+    if (!is_initialized) talys_engine_init();
+    if (mode <= 4) global_workspaces.setDefaultLayout(@enumFromInt(mode));
+}
+
+/// Newest tiled window on the active workspace that can't get its minimum size; 0 when everything fits.
+pub export fn talys_engine_find_overflow(screen_rect: Rect) WindowId {
+    if (!is_initialized) return 0;
+    return global_workspaces.getActiveEngine().findOverflow(screen_rect, global_gaps, &global_mins) orelse 0;
+}
+
+/// How the active workspace's last Smart search went.
+pub export fn talys_engine_get_smart_stats(out: *SmartStats) void {
+    if (!is_initialized) {
+        out.* = .{};
+        return;
+    }
+    out.* = global_workspaces.getActiveEngine().smart.stats;
 }
 
 pub export fn talys_engine_calculate_layout(

@@ -180,7 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .command("retile", "Retile All Windows", subtitle: "Re-scan and tile the current workspace", symbol: "square.grid.2x2.fill") {
                 tc.retileAll()
             },
-            .command("layout", "Cycle Layout", subtitle: "Dwindle → Master-Stack → Scrolling → Monocle", symbol: "square.split.bottomrightquarter") {
+            .command("layout", "Cycle Layout", subtitle: "Smart → Dwindle → Master-Stack → Scrolling → Monocle", symbol: "square.split.bottomrightquarter") {
                 tc.cycleLayout()
             },
             .command("tiling", tc.isEnabled ? "Disable Tiling" : "Enable Tiling", subtitle: "Toggle the tiling engine", symbol: "power") {

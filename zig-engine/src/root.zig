@@ -17,4 +17,5 @@ test {
     _ = @import("workspace.zig");
     _ = @import("constraints.zig");
     _ = @import("scroll.zig");
+    _ = @import("smart.zig");
 }

@@ -48,8 +48,8 @@ public final class TilingController {
     private var parkOnArrival: Set<TalysWindowId> = []
     /// Less than this much of a column on screen isn't worth showing; it's parked instead.
     private static let minVisibleWidth: CGFloat = 40
-    /// Mirrors the engine's `min_tile`: no tiled window gets less than this.
-    private static let minTile = CGSize(width: 300, height: 150)
+    /// Last Smart search logged, per workspace, so each is logged once.
+    private var loggedSmartSearch: (workspace: UInt8, searches: UInt32)?
     /// A window that can't fit its workspace moves to the next one with room (else it floats).
     private var overflowToWorkspace = true
     /// Newly opened windows that overflow take the view with them; otherwise the bar flashes their workspace.
@@ -159,6 +159,19 @@ public final class TilingController {
 
     public func setWindowRules(_ rules: [WindowRule]) {
         self.rulesMatcher = WindowRulesMatcher(rules: rules)
+        lock.lock()
+        let records = Array(windowMap.values)
+        lock.unlock()
+        for record in records {
+            sendPrefs(for: record)
+        }
+    }
+
+    /// Hands the engine the window's Smart layout preferences: its app's built-in ones, then its window rules.
+    private func sendPrefs(for record: WindowRecord) {
+        let app = NSRunningApplication(processIdentifier: record.pid)
+        let rules = rulesMatcher.matches(appName: app?.localizedName, windowTitle: record.title)
+        WindowPrefs.resolve(bundleId: app?.bundleIdentifier, rules: rules).send(for: record.id)
     }
 
     public func setOverflow(toWorkspace: Bool, follow: Bool) {
@@ -250,13 +263,14 @@ public final class TilingController {
         lock.unlock()
 
         let appName = NSRunningApplication(processIdentifier: pid)?.localizedName
-        let matchedRule = rulesMatcher.match(appName: appName, windowTitle: title)
+        let matchedRules = rulesMatcher.matches(appName: appName, windowTitle: title)
 
         applyRememberedMinSize(wid, pid: pid)
+        sendPrefs(for: record)
 
         let currentWs = talys_engine_get_active_workspace()
         let home = retileHomes.first { CFEqual($0.element, element) }?.workspace
-        var targetWs = home ?? matchedRule?.workspace ?? currentWs
+        var targetWs = home ?? matchedRules.lazy.compactMap(\.workspace).first ?? currentWs
         // A rule's workspace that's already full cascades on to the next one with room.
         if home == nil, targetWs != currentWs, overflowToWorkspace, !talys_engine_fits_on_workspace(wid, targetWs, Self.getAxScreenRect()) {
             let room = talys_engine_find_room(wid, targetWs, 0, Self.getAxScreenRect())
@@ -275,7 +289,7 @@ public final class TilingController {
             talys_engine_add_window(wid)
             print("[TilingController] Added window [ID \(wid)] \"\(title)\" (pid: \(pid)) to workspace \(currentWs)")
 
-            if matchedRule?.floating == true {
+            if matchedRules.lazy.compactMap(\.floating).first == true {
                 _ = talys_engine_toggle_float(wid)
                 print("[TilingController] Window rule applied: auto-float [ID \(wid)]")
             }
@@ -488,6 +502,7 @@ public final class TilingController {
         case TALYS_LAYOUT_MASTER_STACK: "Master-Stack"
         case TALYS_LAYOUT_MONOCLE: "Monocle"
         case TALYS_LAYOUT_SCROLLING: "Scrolling"
+        case TALYS_LAYOUT_SMART: "Smart"
         default: "Unknown"
         }
         print("[TilingController] Cycled layout mode -> \(modeName)")
@@ -731,31 +746,13 @@ public final class TilingController {
         }
     }
 
-    /// Runs the engine's layout. In tiling layouts where a window's minimum size can't fit any split, the newest
+    /// Runs the engine's layout. In tiling layouts where a window's minimum size can't fit anywhere, the newest
     /// such window moves to the next workspace with room (or floats, centred on top, when there's none or
-    /// overflow is set to float) and the layout reruns, until everything left fits.
+    /// overflow is set to float), until everything left fits.
     private func layoutFloatingWhatDoesntFit(_ screenRect: TalysRect) -> [(TalysWindowId, CGRect)] {
-        let maxCount = 128
-        var outIds = [TalysWindowId](repeating: 0, count: maxCount)
-        var outRects = [TalysRect](repeating: TalysRect(x: 0, y: 0, width: 0, height: 0), count: maxCount)
-
         while true {
-            let count = Int(talys_engine_calculate_layout(screenRect, maxCount, &outIds, &outRects))
-            let tiles = (0..<count).map { i in
-                (outIds[i], CGRect(x: outRects[i].x, y: outRects[i].y, width: outRects[i].width, height: outRects[i].height))
-            }
-
-            let mode = Int32(talys_engine_get_layout_mode())
-            guard count > 1, mode == TALYS_LAYOUT_DWINDLE || mode == TALYS_LAYOUT_MASTER_STACK, !talys_engine_is_fullscreen() else {
-                return tiles
-            }
-            // Same floor the engine lays out with, so a window it couldn't fit is never left in a sliver.
-            let tooSmall = tiles.filter { wid, tile in
-                let min = minSizes[wid] ?? .zero
-                return Swift.max(min.width, Self.minTile.width) > tile.width + 1
-                    || Swift.max(min.height, Self.minTile.height) > tile.height + 1
-            }
-            guard let newest = tooSmall.map(\.0).max() else { return tiles }
+            let newest = talys_engine_find_overflow(screenRect)
+            guard newest != 0 else { break }
 
             lock.lock()
             let record = windowMap[newest]
@@ -770,6 +767,30 @@ public final class TilingController {
                 print("[TilingController] Window [ID \(newest)] \"\(record.title)\" can't shrink to fit a tile; floating it")
                 AccessibilityHelper.setFrame(for: record.element, frame: centredFrame(fitting: minSizes[newest] ?? .zero, in: screenRect))
             }
+        }
+
+        let maxCount = 128
+        var outIds = [TalysWindowId](repeating: 0, count: maxCount)
+        var outRects = [TalysRect](repeating: TalysRect(x: 0, y: 0, width: 0, height: 0), count: maxCount)
+        let count = Int(talys_engine_calculate_layout(screenRect, maxCount, &outIds, &outRects))
+        logSmartSearch()
+        return (0..<count).map { i in
+            (outIds[i], CGRect(x: outRects[i].x, y: outRects[i].y, width: outRects[i].width, height: outRects[i].height))
+        }
+    }
+
+    /// Logs a Smart search the layout just ran: how many arrangements it tried and whether it rearranged.
+    private func logSmartSearch() {
+        var stats = TalysSmartStats()
+        talys_engine_get_smart_stats(&stats)
+        let ws = talys_engine_get_active_workspace()
+        guard stats.searches > 0, loggedSmartSearch.map({ $0.workspace != ws || $0.searches != stats.searches }) ?? true else { return }
+        loggedSmartSearch = (ws, stats.searches)
+        let score = { (cost: Double) in String(format: "%.2f", cost) }
+        if stats.changed {
+            print("[Smart] Tried \(stats.evaluated) arrangements; rearranged (score \(score(stats.baseline_cost)) → \(score(stats.cost)))")
+        } else {
+            print("[Smart] Tried \(stats.evaluated) arrangements; kept the current one (score \(score(stats.cost)))")
         }
     }
 

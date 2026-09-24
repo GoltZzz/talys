@@ -16,7 +16,7 @@ It's meant to feel like a Linux tiling setup such as Hyprland, while running as 
 
 ## What it does
 
-- **Automatic tiling.** New windows split the screen the way Hyprland's dwindle layout does. You can also switch to master-stack or monocle.
+- **Automatic tiling.** The default Smart layout tries every way to arrange your windows and picks the one that suits each best: terminals get tall columns, browsers don't stretch past a useful width, and nothing shrinks below the size its app needs. You can also switch to dwindle, master-stack, scrolling or monocle.
 - **Keyboard first.** Move focus, swap windows, resize splits, float and fullscreen, all from home-row keys.
 - **Workspaces.** Nine virtual workspaces that replace macOS desktops (Spaces), with per-app rules that send apps to their own workspace.
 - **Built-in status bar.** A themed bar at the top of the screen shows your workspaces, the time, battery, Wi-Fi and volume. On first launch Talys asks whether to use it in place of the macOS menu bar, which it then hides and covers while Talys runs.
@@ -53,7 +53,7 @@ If you chose the Talys bar, Talys sets the macOS menu bar to hide automatically 
 
 Talys is an early-stage personal project. It's usable every day on a single display, and rough edges are expected.
 
-- [x] Dwindle, master-stack and monocle layouts
+- [x] Smart (constraint-based), dwindle, master-stack and monocle layouts
 - [x] Workspaces, window rules, scratchpad
 - [x] Status bar, launcher, borders, themes
 - [ ] Multi-monitor support

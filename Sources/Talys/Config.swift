@@ -23,7 +23,7 @@ public struct GapsConfig: Codable, Sendable {
 }
 
 public struct GeneralConfig: Codable, Sendable {
-    public var layout: String = "dwindle"
+    public var layout: String = "smart"
     /// Modifier(s) substituted for `mod` in keybindings, e.g. "alt", "cmd", "hyper", "ctrl+alt".
     public var mod: String = "alt"
     /// Theme name; falls back to `[bar] theme` when unset.
@@ -34,7 +34,7 @@ public struct GeneralConfig: Codable, Sendable {
     /// Switch to the workspace a newly opened window overflowed to.
     public var overflow_follow: Bool = true
 
-    public init(layout: String = "dwindle", mod: String = "alt", theme: String? = nil,
+    public init(layout: String = "smart", mod: String = "alt", theme: String? = nil,
                 overflow: String = "workspace", overflow_follow: Bool = true) {
         self.layout = layout
         self.mod = mod
@@ -59,12 +59,22 @@ public struct WindowRule: Codable, Sendable {
     public var title: String?
     public var floating: Bool?
     public var workspace: UInt8?
+    /// Smart layout: preferred shape — "tall", "wide", "square", "16:9" or a width ÷ height number.
+    public var aspect: String?
+    /// Smart layout: width past which the window just wastes space.
+    public var max_width: Double?
+    /// Smart layout: share of the screen relative to other windows (1 = normal).
+    public var weight: Double?
 
-    public init(app: String? = nil, title: String? = nil, floating: Bool? = nil, workspace: UInt8? = nil) {
+    public init(app: String? = nil, title: String? = nil, floating: Bool? = nil, workspace: UInt8? = nil,
+                aspect: String? = nil, max_width: Double? = nil, weight: Double? = nil) {
         self.app = app
         self.title = title
         self.floating = floating
         self.workspace = workspace
+        self.aspect = aspect
+        self.max_width = max_width
+        self.weight = weight
     }
 }
 
@@ -268,7 +278,7 @@ public enum ConfigManager {
 # Talys Configuration (~/.config/talys/config.toml)
 
 [general]
-layout = "dwindle"          # "dwindle", "master_stack", "scrolling", "monocle"
+layout = "smart"            # "smart", "dwindle", "master_stack", "scrolling", "monocle"
 mod = "alt"                 # Modifier used by "mod+..." binds: "alt", "cmd", "ctrl", "hyper", or combos like "ctrl+alt"
 theme = "catppuccin_mocha"  # catppuccin_mocha, tokyo_night, gruvbox, rose_pine, nord, or ~/.config/talys/themes/<name>.toml
 overflow = "workspace"      # Window too big to fit its workspace: "workspace" (next one with room) or "float"
@@ -372,6 +382,13 @@ exec = "osascript -e 'tell application \\"Terminal\\" to do script \\"\\"' -e 't
 # [[window_rules]]
 # app = "Spotify"
 # workspace = 3
+#
+# Smart layout preferences (common terminals, browsers, editors and chat apps have built-in ones):
+# [[window_rules]]
+# app = "Ghostty"
+# aspect = "tall"           # "tall", "wide", "square", "16:9", or a width ÷ height number
+# weight = 1.5              # share of the screen relative to other windows (1 = normal)
+# max_width = 1400.0        # wider than this just wastes space
 """
 
     public static func loadConfig(from url: URL = configURL) -> TalysConfig {
@@ -413,16 +430,14 @@ exec = "osascript -e 'tell application \\"Terminal\\" to do script \\"\\"' -e 't
     public static func applyConfig(_ config: TalysConfig, to controller: TilingController, keyboard: KeyboardManager) {
         controller.setGaps(inner: config.gaps.inner, outer: config.gaps.outer)
 
-        switch config.general.layout.lowercased() {
-        case "master_stack", "master-stack":
-            talys_engine_set_layout_mode(UInt8(TALYS_LAYOUT_MASTER_STACK))
-        case "monocle":
-            talys_engine_set_layout_mode(UInt8(TALYS_LAYOUT_MONOCLE))
-        case "scrolling", "scroll":
-            talys_engine_set_layout_mode(UInt8(TALYS_LAYOUT_SCROLLING))
-        default:
-            talys_engine_set_layout_mode(UInt8(TALYS_LAYOUT_DWINDLE))
+        let layout: Int32 = switch config.general.layout.lowercased() {
+        case "dwindle": TALYS_LAYOUT_DWINDLE
+        case "master_stack", "master-stack": TALYS_LAYOUT_MASTER_STACK
+        case "monocle": TALYS_LAYOUT_MONOCLE
+        case "scrolling", "scroll": TALYS_LAYOUT_SCROLLING
+        default: TALYS_LAYOUT_SMART
         }
+        talys_engine_set_default_layout_mode(UInt8(layout))
         TalysDesktopState.shared.updateLayoutModeFromEngine()
 
         controller.setWindowRules(config.window_rules)

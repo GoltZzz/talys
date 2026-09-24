@@ -487,7 +487,7 @@ private struct SearchResultsPage: View {
     let open: (SettingsSection) -> Void
 
     private static let index: [(title: String, section: SettingsSection, keywords: String)] = [
-        ("Layout", .general, "dwindle master stack scrolling monocle tiling"),
+        ("Layout", .general, "smart dwindle master stack scrolling monocle tiling"),
         ("Modifier key (mod)", .general, "mod alt option cmd command ctrl control hyper meh"),
         ("When a window doesn't fit", .general, "overflow too big float workspace"),
         ("Follow overflowing windows", .general, "overflow follow"),

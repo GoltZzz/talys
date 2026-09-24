@@ -2,9 +2,10 @@ const std = @import("std");
 const geometry = @import("geometry.zig");
 const constraints = @import("constraints.zig");
 const scroll = @import("scroll.zig");
+const smart = @import("smart.zig");
 const Rect = geometry.Rect;
 const GapConfig = geometry.GapConfig;
-const MinSizes = constraints.MinSizes;
+const WindowHints = constraints.WindowHints;
 
 pub const WindowId = u32;
 pub const NodeIndex = u16;
@@ -24,6 +25,7 @@ pub const LayoutMode = enum(u8) {
     master_stack = 1,
     monocle = 2,
     scrolling = 3,
+    smart = 4,
 };
 
 pub const NodeData = union(enum) {
@@ -31,12 +33,13 @@ pub const NodeData = union(enum) {
     leaf: struct {
         window_id: WindowId,
     },
-    /// Split direction isn't stored: each branch splits along the longer side of the rect it gets,
-    /// so tiles stay close to square however the tree was built.
+    /// Dwindle doesn't use `axis`: each branch splits along the longer side of the rect it gets, so tiles
+    /// stay close to square however the tree was built. Smart sets it to the direction it chose.
     branch: struct {
         ratio: f64,
         left: NodeIndex,
         right: NodeIndex,
+        axis: smart.Axis = .auto,
     },
 };
 
@@ -62,6 +65,8 @@ pub const BspEngine = struct {
     /// switched to without losing the other's arrangement.
     strip: scroll.ScrollStrip = .{},
 
+    smart: smart.State = .{},
+
     pub fn init() BspEngine {
         var engine = BspEngine{};
         engine.reset();
@@ -75,6 +80,7 @@ pub const BspEngine = struct {
         self.fullscreen = false;
         self.floating_count = 0;
         self.strip.reset();
+        self.smart.reset();
 
         self.free_count = MAX_NODES;
         for (0..MAX_NODES) |i| {
@@ -175,6 +181,7 @@ pub const BspEngine = struct {
 
     pub fn addWindow(self: *BspEngine, wid: WindowId) void {
         if (self.hasWindow(wid)) return;
+        self.smart.dirty = true;
 
         // New columns open right after the focused one.
         const anchor: ?usize = if (self.focused_window) |f| (if (self.strip.find(f)) |p| p.col else null) else null;
@@ -257,6 +264,8 @@ pub const BspEngine = struct {
 
         const leaf_idx = self.findLeafByWindow(wid);
         if (leaf_idx == null_node) return;
+        self.smart.dirty = true;
+        self.smart.manual.remove(wid);
 
         const strip_successor = if (self.layout_mode == .scrolling and self.focused_window == wid) self.strip.successor(wid) else null;
         self.strip.remove(wid);
@@ -336,18 +345,31 @@ pub const BspEngine = struct {
     }
 
     pub fn cycleLayout(self: *BspEngine) void {
-        self.layout_mode = switch (self.layout_mode) {
+        self.setLayoutMode(switch (self.layout_mode) {
+            .smart => .dwindle,
             .dwindle => .master_stack,
             .master_stack => .scrolling,
             .scrolling => .monocle,
-            .monocle => .dwindle,
-        };
+            .monocle => .smart,
+        });
+    }
+
+    pub fn setLayoutMode(self: *BspEngine, mode: LayoutMode) void {
+        // Coming back to Smart, the tree may have been rearranged by hand in another layout.
+        if (mode == .smart and self.layout_mode != .smart) self.smart.dirty = true;
+        self.layout_mode = mode;
     }
 
     pub fn resizeFocused(self: *BspEngine, delta: f64) void {
         const wid = self.focused_window orelse return;
         if (self.layout_mode == .scrolling) {
             self.strip.resize(wid, delta);
+            return;
+        }
+        if (self.layout_mode == .smart) {
+            // Smart has no dividers to drag: resizing makes the window ask for more (or less) of the screen.
+            self.smart.manual.scaleBy(wid, @exp(delta * 5));
+            self.smart.manual.pin(wid);
             return;
         }
         const leaf_idx = self.findLeafByWindow(wid);
@@ -368,7 +390,7 @@ pub const BspEngine = struct {
         self: *BspEngine,
         screen_rect: Rect,
         gaps: GapConfig,
-        mins: *const MinSizes,
+        mins: *const WindowHints,
         max_count: usize,
         out_ids: [*]WindowId,
         out_rects: [*]Rect,
@@ -445,6 +467,7 @@ pub const BspEngine = struct {
                 return limit;
             },
             .scrolling => return self.strip.layout(screen_rect, gaps, mins, self.focused_window, max_count, out_ids, out_rects),
+            .smart => return self.layoutSmart(screen_rect, gaps, mins, max_count, out_ids, out_rects),
             .monocle => unreachable,
         }
     }
@@ -492,7 +515,7 @@ pub const BspEngine = struct {
     }
 
     /// Smallest width (`along_width`) or height the subtree can be squeezed into, laid out as it would be in `rect`.
-    fn minExtent(self: *const BspEngine, node_idx: NodeIndex, rect: Rect, gap: f64, mins: *const MinSizes, along_width: bool) f64 {
+    fn minExtent(self: *const BspEngine, node_idx: NodeIndex, rect: Rect, gap: f64, mins: *const WindowHints, along_width: bool) f64 {
         if (node_idx == null_node) return 0;
         switch (self.nodes[node_idx].data) {
             .leaf => |leaf| {
@@ -513,7 +536,7 @@ pub const BspEngine = struct {
 
     /// Splits a branch's rect so both halves fit their windows' minimum sizes, moving the divider and, if that
     /// isn't enough, flipping the split direction. Returns null when neither direction fits.
-    fn fitSplit(self: *const BspEngine, branch_left: NodeIndex, branch_right: NodeIndex, ratio: f64, rect: Rect, gap: f64, mins: *const MinSizes, side_by_side: bool) ?[2]Rect {
+    fn fitSplit(self: *const BspEngine, branch_left: NodeIndex, branch_right: NodeIndex, ratio: f64, rect: Rect, gap: f64, mins: *const WindowHints, side_by_side: bool) ?[2]Rect {
         const total = @max(0.0, if (side_by_side) rect.width - gap else rect.height - gap);
         const cross = if (side_by_side) rect.height else rect.width;
         const nominal = splitRect(rect, side_by_side, gap, @round(total * ratio));
@@ -533,7 +556,7 @@ pub const BspEngine = struct {
         node_idx: NodeIndex,
         rect: Rect,
         inner_gap: f64,
-        mins: *const MinSizes,
+        mins: *const WindowHints,
         max_count: usize,
         out_ids: [*]WindowId,
         out_rects: [*]Rect,
@@ -567,7 +590,7 @@ pub const BspEngine = struct {
         dir: Direction,
         screen_rect: Rect,
         gaps: GapConfig,
-        mins: *const MinSizes,
+        mins: *const WindowHints,
     ) ?WindowId {
         const focused = self.focused_window orelse return null;
 
@@ -663,7 +686,7 @@ pub const BspEngine = struct {
         dir: Direction,
         screen_rect: Rect,
         gaps: GapConfig,
-        mins: *const MinSizes,
+        mins: *const WindowHints,
     ) ?WindowId {
         if (self.findNeighbor(dir, screen_rect, gaps, mins)) |target_wid| {
             self.setFocus(target_wid);
@@ -677,7 +700,7 @@ pub const BspEngine = struct {
         dir: Direction,
         screen_rect: Rect,
         gaps: GapConfig,
-        mins: *const MinSizes,
+        mins: *const WindowHints,
     ) bool {
         const focused = self.focused_window orelse return false;
 
@@ -694,6 +717,8 @@ pub const BspEngine = struct {
 
         self.nodes[leaf1].data.leaf.window_id = target_wid;
         self.nodes[leaf2].data.leaf.window_id = focused;
+        self.smart.manual.pin(focused);
+        self.smart.manual.pin(target_wid);
 
         self.focused_window = focused;
         return true;
@@ -709,6 +734,8 @@ pub const BspEngine = struct {
         self.nodes[leaf_a].data.leaf.window_id = b;
         self.nodes[leaf_b].data.leaf.window_id = a;
         self.strip.swapWindows(a, b);
+        self.smart.manual.pin(a);
+        self.smart.manual.pin(b);
 
         self.focused_window = a;
         return true;
@@ -716,11 +743,11 @@ pub const BspEngine = struct {
 
     /// True when every tiled window gets at least its minimum size. Scrolling, monocle and fullscreen never
     /// squeeze windows, so they always fit.
-    pub fn allFit(self: *BspEngine, screen_rect: Rect, gaps: GapConfig, mins: *const MinSizes) bool {
+    pub fn allFit(self: *BspEngine, screen_rect: Rect, gaps: GapConfig, mins: *const WindowHints) bool {
         if (self.fullscreen) return true;
         switch (self.layout_mode) {
             .monocle, .scrolling => return true,
-            .dwindle, .master_stack => {},
+            .dwindle, .master_stack, .smart => {},
         }
         var ids: [MAX_WINDOWS]WindowId = undefined;
         var rects: [MAX_WINDOWS]Rect = undefined;
@@ -730,6 +757,122 @@ pub const BspEngine = struct {
             if (m.width > rects[i].width + 1 or m.height > rects[i].height + 1) return false;
         }
         return true;
+    }
+
+    /// Newest tiled window whose tile is smaller than its minimum size, or null when all fit. Only layouts that
+    /// squeeze windows side by side can overflow, and a lone window always keeps the screen.
+    pub fn findOverflow(self: *BspEngine, screen_rect: Rect, gaps: GapConfig, mins: *const WindowHints) ?WindowId {
+        if (self.fullscreen) return null;
+        switch (self.layout_mode) {
+            .monocle, .scrolling => return null,
+            .dwindle, .master_stack, .smart => {},
+        }
+        var ids: [MAX_WINDOWS]WindowId = undefined;
+        var rects: [MAX_WINDOWS]Rect = undefined;
+        const n = self.calculateLayout(screen_rect, gaps, mins, MAX_WINDOWS, &ids, &rects);
+        if (n <= 1) return null;
+        var newest: ?WindowId = null;
+        for (0..n) |i| {
+            const m = mins.tile(ids[i]);
+            if (m.width > rects[i].width + 1 or m.height > rects[i].height + 1) {
+                if (newest == null or ids[i] > newest.?) newest = ids[i];
+            }
+        }
+        return newest;
+    }
+
+    /// Smart layout: searches for a better arrangement when windows, screen or hints changed since the last
+    /// one, writes it into the tree, then places the windows.
+    fn layoutSmart(
+        self: *BspEngine,
+        screen_rect: Rect,
+        gaps: GapConfig,
+        mins: *const WindowHints,
+        max_count: usize,
+        out_ids: [*]WindowId,
+        out_rects: [*]Rect,
+    ) usize {
+        if (self.root == null_node) return 0;
+        const area = screen_rect.insetUniform(gaps.outer);
+
+        var tree = smart.Tree{};
+        tree.root = self.toSmartTree(self.root, &tree) orelse {
+            // Too many windows to search: lay them out like Dwindle.
+            var count: usize = 0;
+            self.renderNode(self.root, area, gaps.inner, mins, max_count, out_ids, out_rects, &count);
+            return count;
+        };
+
+        const ctx = smart.Context{ .area = area, .gap = gaps.inner, .hints = mins, .manual = &self.smart.manual, .prev = &self.smart.prev };
+        smart.resolveAxes(&tree, ctx);
+        var rects: [smart.MAX_TREE_NODES]Rect = undefined;
+        // A swap can leave windows that no longer fit where they were put; that calls for a search too.
+        if (self.smart.needsSearch(area, gaps.inner, mins.version) or (!self.smart.no_fit and !smart.evaluate(&tree, ctx, &rects).fits)) {
+            const result = smart.optimize(&tree, ctx);
+            self.smart.searched(&result, area, gaps.inner, mins.version);
+            if (result.changed) {
+                tree = result.tree;
+                smart.arrange(&tree, ctx, &rects);
+                self.freeSubtree(self.root);
+                self.root = self.fromSmartTree(&tree, tree.root, &rects, gaps.inner, null_node);
+            }
+        }
+        smart.arrange(&tree, ctx, &rects);
+
+        var count: usize = 0;
+        for (tree.nodes[0..tree.len], 0..) |node, i| {
+            if (!node.isLeaf() or count >= max_count) continue;
+            out_ids[count] = node.wid;
+            out_rects[count] = rects[i];
+            count += 1;
+        }
+        self.smart.prev.record(out_ids, out_rects, count);
+        return count;
+    }
+
+    /// Copies the subtree into `tree`; null when it holds more windows than Smart arranges.
+    fn toSmartTree(self: *const BspEngine, node_idx: NodeIndex, tree: *smart.Tree) ?u8 {
+        switch (self.nodes[node_idx].data) {
+            .leaf => |leaf| return tree.addLeaf(leaf.window_id),
+            .branch => |branch| {
+                const l = self.toSmartTree(branch.left, tree) orelse return null;
+                const r = self.toSmartTree(branch.right, tree) orelse return null;
+                return tree.addBranch(branch.axis, l, r);
+            },
+            .empty => return null,
+        }
+    }
+
+    /// Builds tree nodes for a Smart arrangement, with ratios matching where it put the windows.
+    fn fromSmartTree(self: *BspEngine, tree: *const smart.Tree, idx: u8, rects: *const [smart.MAX_TREE_NODES]Rect, gap: f64, parent: NodeIndex) NodeIndex {
+        const node_idx = self.allocNode() orelse return null_node;
+        self.nodes[node_idx].parent = parent;
+        const node = tree.nodes[idx];
+        if (node.isLeaf()) {
+            self.nodes[node_idx].data = .{ .leaf = .{ .window_id = node.wid } };
+            return node_idx;
+        }
+        const rect = rects[idx];
+        const first = rects[node.left];
+        const side_by_side = node.axis == .side_by_side;
+        const total = @max(1.0, (if (side_by_side) rect.width else rect.height) - gap);
+        const ratio = std.math.clamp((if (side_by_side) first.width else first.height) / total, 0.05, 0.95);
+        const left = self.fromSmartTree(tree, node.left, rects, gap, node_idx);
+        const right = self.fromSmartTree(tree, node.right, rects, gap, node_idx);
+        self.nodes[node_idx].data = .{ .branch = .{ .ratio = ratio, .left = left, .right = right, .axis = node.axis } };
+        return node_idx;
+    }
+
+    fn freeSubtree(self: *BspEngine, node_idx: NodeIndex) void {
+        if (node_idx == null_node) return;
+        switch (self.nodes[node_idx].data) {
+            .branch => |branch| {
+                self.freeSubtree(branch.left);
+                self.freeSubtree(branch.right);
+            },
+            .leaf, .empty => {},
+        }
+        self.freeNode(node_idx);
     }
 
     /// Scrolling layout: steps the focused column through the preset widths.
@@ -765,7 +908,7 @@ test "BspEngine basic add, remove, focus" {
     const count = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 10 },
-        &MinSizes.empty,
+        &WindowHints.empty,
         10,
         &ids,
         &rects,
@@ -778,7 +921,7 @@ test "BspEngine basic add, remove, focus" {
     const count2 = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 10 },
-        &MinSizes.empty,
+        &WindowHints.empty,
         10,
         &ids,
         &rects,
@@ -800,7 +943,7 @@ test "BspEngine splits follow tile shape after removals" {
     const count = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 0 },
-        &MinSizes.empty,
+        &WindowHints.empty,
         10,
         &ids,
         &rects,
@@ -821,14 +964,14 @@ test "BspEngine focus and swap directional" {
     const screen = Rect{ .x = 0, .y = 0, .width = 1000, .height = 500 };
     const gaps = GapConfig{ .inner = 10, .outer = 10 };
 
-    const left_wid = engine.focusDirection(.left, screen, gaps, &MinSizes.empty);
+    const left_wid = engine.focusDirection(.left, screen, gaps, &WindowHints.empty);
     try std.testing.expectEqual(@as(?WindowId, 1), left_wid);
     try std.testing.expectEqual(@as(?WindowId, 1), engine.getFocus());
 
-    const right_wid = engine.focusDirection(.right, screen, gaps, &MinSizes.empty);
+    const right_wid = engine.focusDirection(.right, screen, gaps, &WindowHints.empty);
     try std.testing.expectEqual(@as(?WindowId, 2), right_wid);
 
-    const swapped = engine.swapDirection(.left, screen, gaps, &MinSizes.empty);
+    const swapped = engine.swapDirection(.left, screen, gaps, &WindowHints.empty);
     try std.testing.expect(swapped);
 }
 
@@ -842,7 +985,7 @@ test "BspEngine swapWindows trades tiles" {
     const gaps = GapConfig{ .inner = 10, .outer = 10 };
     var ids: [10]WindowId = undefined;
     var before: [10]Rect = undefined;
-    _ = engine.calculateLayout(screen, gaps, &MinSizes.empty, 10, &ids, &before);
+    _ = engine.calculateLayout(screen, gaps, &WindowHints.empty, 10, &ids, &before);
 
     try std.testing.expect(engine.swapWindows(1, 3));
     try std.testing.expect(!engine.swapWindows(1, 1));
@@ -850,7 +993,7 @@ test "BspEngine swapWindows trades tiles" {
 
     var after_ids: [10]WindowId = undefined;
     var after: [10]Rect = undefined;
-    const n = engine.calculateLayout(screen, gaps, &MinSizes.empty, 10, &after_ids, &after);
+    const n = engine.calculateLayout(screen, gaps, &WindowHints.empty, 10, &after_ids, &after);
     for (0..n) |i| {
         const want: WindowId = switch (ids[i]) {
             1 => 3,
@@ -883,7 +1026,7 @@ test "BspEngine floating and fullscreen" {
     const count = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 10 },
-        &MinSizes.empty,
+        &WindowHints.empty,
         10,
         &ids,
         &rects,
@@ -901,7 +1044,7 @@ test "BspEngine floating and fullscreen" {
     const count_fs = engine.calculateLayout(
         .{ .x = 0, .y = 0, .width = 1000, .height = 500 },
         .{ .inner = 10, .outer = 10 },
-        &MinSizes.empty,
+        &WindowHints.empty,
         10,
         &ids,
         &rects,
@@ -913,7 +1056,7 @@ test "BspEngine dwindle moves the divider for minimum widths" {
     var engine = BspEngine.init();
     engine.addWindow(1);
     engine.addWindow(2);
-    var mins = MinSizes{};
+    var mins = WindowHints{};
     mins.set(1, .{ .width = 650 });
 
     var ids: [10]WindowId = undefined;
@@ -927,7 +1070,7 @@ test "BspEngine dwindle stacks when side by side can't fit" {
     var engine = BspEngine.init();
     engine.addWindow(1);
     engine.addWindow(2);
-    var mins = MinSizes{};
+    var mins = WindowHints{};
     mins.set(1, .{ .width = 600 });
     mins.set(2, .{ .width = 600 });
 
@@ -948,20 +1091,20 @@ test "BspEngine scrolling layout navigation" {
     const screen = Rect{ .x = 0, .y = 0, .width = 1000, .height = 500 };
     const gaps = GapConfig{ .inner = 0, .outer = 0 };
 
-    try std.testing.expectEqual(@as(?WindowId, 2), engine.focusDirection(.left, screen, gaps, &MinSizes.empty));
+    try std.testing.expectEqual(@as(?WindowId, 2), engine.focusDirection(.left, screen, gaps, &WindowHints.empty));
     try std.testing.expect(engine.consumeOrExpel(.left)); // columns: (1 / 2) 3
     try std.testing.expectEqual(@as(usize, 2), engine.strip.count);
-    try std.testing.expectEqual(@as(?WindowId, 1), engine.focusDirection(.up, screen, gaps, &MinSizes.empty));
-    try std.testing.expectEqual(@as(?WindowId, 3), engine.focusDirection(.right, screen, gaps, &MinSizes.empty));
+    try std.testing.expectEqual(@as(?WindowId, 1), engine.focusDirection(.up, screen, gaps, &WindowHints.empty));
+    try std.testing.expectEqual(@as(?WindowId, 3), engine.focusDirection(.right, screen, gaps, &WindowHints.empty));
     // Coming back to the stacked column lands on the window focused there last.
-    try std.testing.expectEqual(@as(?WindowId, 1), engine.focusDirection(.left, screen, gaps, &MinSizes.empty));
+    try std.testing.expectEqual(@as(?WindowId, 1), engine.focusDirection(.left, screen, gaps, &WindowHints.empty));
 
     engine.removeWindow(1);
     try std.testing.expectEqual(@as(?WindowId, 2), engine.getFocus());
 
     var ids: [10]WindowId = undefined;
     var rects: [10]Rect = undefined;
-    const count = engine.calculateLayout(screen, gaps, &MinSizes.empty, 10, &ids, &rects);
+    const count = engine.calculateLayout(screen, gaps, &WindowHints.empty, 10, &ids, &rects);
     try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqual(@as(f64, 500), rects[0].height); // back to a lone window, full height
 }
@@ -974,7 +1117,7 @@ test "BspEngine dwindle never hands a window a sliver tile" {
     engine.addWindow(2);
     engine.addWindow(3);
     engine.addWindow(4);
-    var mins = MinSizes{};
+    var mins = WindowHints{};
     mins.set(2, .{ .height = 400 });
     mins.set(3, .{ .width = 940, .height = 600 });
     mins.set(4, .{ .height = 469 });
@@ -985,5 +1128,134 @@ test "BspEngine dwindle never hands a window a sliver tile" {
     for (0..n) |i| {
         try std.testing.expect(rects[i].width >= constraints.min_tile.width);
         try std.testing.expect(rects[i].height >= constraints.min_tile.height);
+    }
+}
+
+fn expectNoOverlap(ids: []const WindowId, rects: []const Rect, screen: Rect) !void {
+    for (rects, 0..) |r, i| {
+        try std.testing.expect(r.x >= screen.x - 0.5 and r.y >= screen.y - 0.5);
+        try std.testing.expect(r.x + r.width <= screen.x + screen.width + 0.5);
+        try std.testing.expect(r.y + r.height <= screen.y + screen.height + 0.5);
+        for (rects[i + 1 ..], i + 1..) |q, j| {
+            const overlap_w = @min(r.x + r.width, q.x + q.width) - @max(r.x, q.x);
+            const overlap_h = @min(r.y + r.height, q.y + q.height) - @max(r.y, q.y);
+            try std.testing.expect(overlap_w <= 0.5 or overlap_h <= 0.5);
+            try std.testing.expect(ids[i] != ids[j]);
+        }
+    }
+}
+
+test "BspEngine smart searches only when windows change" {
+    var engine = BspEngine.init();
+    engine.setLayoutMode(.smart);
+    engine.addWindow(1);
+    engine.addWindow(2);
+    engine.addWindow(3);
+    const screen = Rect{ .x = 0, .y = 0, .width = 1512, .height = 982 };
+    const gaps = GapConfig{ .inner = 8, .outer = 10 };
+    var hints = WindowHints{};
+    hints.setPrefs(2, .{ .aspect = 0.7 });
+
+    var ids: [10]WindowId = undefined;
+    var rects: [10]Rect = undefined;
+    const n = engine.calculateLayout(screen, gaps, &hints, 10, &ids, &rects);
+    try std.testing.expectEqual(@as(usize, 3), n);
+    try expectNoOverlap(ids[0..n], rects[0..n], screen);
+    try std.testing.expectEqual(@as(u32, 1), engine.smart.stats.searches);
+
+    // Focus moves and swaps lay out again without searching; the swapped windows are pinned.
+    _ = engine.focusDirection(.left, screen, gaps, &hints);
+    try std.testing.expect(engine.swapWindows(1, 3));
+    _ = engine.calculateLayout(screen, gaps, &hints, 10, &ids, &rects);
+    try std.testing.expectEqual(@as(u32, 1), engine.smart.stats.searches);
+    try std.testing.expect(engine.smart.manual.isPinned(1) and engine.smart.manual.isPinned(3));
+
+    engine.removeWindow(3);
+    try std.testing.expect(!engine.smart.manual.isPinned(3));
+    _ = engine.calculateLayout(screen, gaps, &hints, 10, &ids, &rects);
+    try std.testing.expectEqual(@as(u32, 2), engine.smart.stats.searches);
+}
+
+test "BspEngine smart resize grows the window" {
+    var engine = BspEngine.init();
+    engine.setLayoutMode(.smart);
+    engine.addWindow(1);
+    engine.addWindow(2);
+    engine.setFocus(1);
+    const screen = Rect{ .x = 0, .y = 0, .width = 1600, .height = 900 };
+    const gaps = GapConfig{ .inner = 0, .outer = 0 };
+
+    var ids: [10]WindowId = undefined;
+    var rects: [10]Rect = undefined;
+    _ = engine.calculateLayout(screen, gaps, &WindowHints.empty, 10, &ids, &rects);
+    const before = if (ids[0] == 1) rects[0].width else rects[1].width;
+    engine.resizeFocused(0.05);
+    _ = engine.calculateLayout(screen, gaps, &WindowHints.empty, 10, &ids, &rects);
+    const after = if (ids[0] == 1) rects[0].width else rects[1].width;
+    try std.testing.expect(after > before + 50);
+}
+
+test "BspEngine smart overflow names the newest misfit" {
+    var engine = BspEngine.init();
+    engine.setLayoutMode(.smart);
+    engine.addWindow(1);
+    engine.addWindow(2);
+    engine.addWindow(3);
+    var hints = WindowHints{};
+    for (1..4) |w| hints.set(@intCast(w), .{ .width = 700, .height = 500 });
+    // Two fit stacked; a third fits nowhere.
+    const screen = Rect{ .x = 0, .y = 0, .width = 1000, .height = 1100 };
+    const gaps = GapConfig{ .inner = 0, .outer = 0 };
+    try std.testing.expectEqual(@as(?WindowId, 3), engine.findOverflow(screen, gaps, &hints));
+    engine.removeWindow(3);
+    try std.testing.expectEqual(@as(?WindowId, null), engine.findOverflow(screen, gaps, &hints));
+}
+
+test "BspEngine smart stays sound through random use" {
+    var prng = std.Random.DefaultPrng.init(0x7a1e5);
+    const random = prng.random();
+    const screen = Rect{ .x = 0, .y = 34, .width = 1680, .height = 1016 };
+    const gaps = GapConfig{ .inner = 8, .outer = 10 };
+
+    for (0..40) |_| {
+        var a = BspEngine.init();
+        a.setLayoutMode(.smart);
+        var hints = WindowHints{};
+        var next: WindowId = 1;
+        for (0..30) |_| {
+            switch (random.uintLessThan(u8, 6)) {
+                0, 1, 2 => {
+                    hints.set(next, .{ .width = @floatFromInt(random.uintLessThan(u32, 700)), .height = @floatFromInt(random.uintLessThan(u32, 500)) });
+                    hints.setPrefs(next, .{ .aspect = if (random.boolean()) 0.7 else 0, .weight = 0.5 + random.float(f64) });
+                    a.addWindow(next);
+                    next += 1;
+                },
+                3 => if (next > 1) a.removeWindow(random.uintLessThan(WindowId, next - 1) + 1),
+                4 => _ = a.swapDirection(@enumFromInt(random.uintLessThan(u8, 4)), screen, gaps, &hints),
+                else => a.resizeFocused(if (random.boolean()) 0.05 else -0.05),
+            }
+            // The same history gives the same layout.
+            var b = a;
+            var ids: [MAX_WINDOWS]WindowId = undefined;
+            var rects: [MAX_WINDOWS]Rect = undefined;
+            var ids_b: [MAX_WINDOWS]WindowId = undefined;
+            var rects_b: [MAX_WINDOWS]Rect = undefined;
+            const n = a.calculateLayout(screen, gaps, &hints, MAX_WINDOWS, &ids, &rects);
+            const n_b = b.calculateLayout(screen, gaps, &hints, MAX_WINDOWS, &ids_b, &rects_b);
+            try std.testing.expectEqual(n, n_b);
+            try std.testing.expectEqualSlices(WindowId, ids[0..n], ids_b[0..n]);
+
+            var tiled: [MAX_WINDOWS]WindowId = undefined;
+            var tiled_count: usize = 0;
+            a.collectLeaves(a.root, &tiled, &tiled_count);
+            try std.testing.expectEqual(tiled_count, n);
+            try expectNoOverlap(ids[0..n], rects[0..n], screen);
+            // Whatever Dwindle can fit, Smart fits too.
+            if (a.findOverflow(screen, gaps, &hints) != null) {
+                var d = a;
+                d.setLayoutMode(.dwindle);
+                try std.testing.expect(d.findOverflow(screen, gaps, &hints) != null);
+            }
+        }
     }
 }

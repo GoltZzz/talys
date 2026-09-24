@@ -8,6 +8,7 @@ import SwiftUI
 
 enum LayoutGeometry {
     static let all: [(value: String, label: String, blurb: String)] = [
+        ("smart", "Smart", "Tries every arrangement and picks what suits each window"),
         ("dwindle", "Dwindle", "Each new window splits the last one in half"),
         ("master_stack", "Master-Stack", "One big window, the rest stacked beside it"),
         ("scrolling", "Scrolling", "Columns scroll sideways instead of shrinking"),
@@ -38,6 +39,16 @@ enum LayoutGeometry {
             ]
         case "monocle":
             return [a]
+        case "smart":
+            // Each window sized to what it wants: a wide main window, a tall column, a narrow side panel.
+            let mainW = ((a.width - 2 * gap) * 0.52).rounded()
+            let colW = ((a.width - 2 * gap) * 0.27).rounded()
+            let sideW = a.width - 2 * gap - mainW - colW
+            return [
+                CGRect(x: a.minX, y: a.minY, width: mainW, height: a.height),
+                CGRect(x: a.minX + mainW + gap, y: a.minY, width: colW, height: a.height),
+                CGRect(x: a.minX + mainW + colW + 2 * gap, y: a.minY, width: sideW, height: a.height),
+            ]
         default:
             let halfW = (a.width - gap) / 2
             let rightX = a.minX + halfW + gap

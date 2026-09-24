@@ -2,7 +2,7 @@ const std = @import("std");
 const bsp = @import("bsp.zig");
 const geometry = @import("geometry.zig");
 const constraints = @import("constraints.zig");
-const MinSizes = constraints.MinSizes;
+const WindowHints = constraints.WindowHints;
 
 pub const WindowId = bsp.WindowId;
 pub const Rect = geometry.Rect;
@@ -17,6 +17,8 @@ pub const SwitchCounts = extern struct {
 pub const WorkspaceManager = struct {
     workspaces: [WORKSPACE_COUNT]bsp.BspEngine = undefined,
     active_workspace: u8 = 1,
+    /// Layout every workspace starts in, and goes back to on a reset.
+    default_layout: bsp.LayoutMode = .smart,
 
     pub fn init() WorkspaceManager {
         var wm = WorkspaceManager{
@@ -24,6 +26,7 @@ pub const WorkspaceManager = struct {
         };
         for (0..WORKSPACE_COUNT) |i| {
             wm.workspaces[i] = bsp.BspEngine.init();
+            wm.workspaces[i].setLayoutMode(wm.default_layout);
         }
         return wm;
     }
@@ -32,7 +35,14 @@ pub const WorkspaceManager = struct {
         self.active_workspace = 1;
         for (0..WORKSPACE_COUNT) |i| {
             self.workspaces[i].reset();
+            self.workspaces[i].setLayoutMode(self.default_layout);
         }
+    }
+
+    /// Puts every workspace in `mode` and makes it the one they reset to.
+    pub fn setDefaultLayout(self: *WorkspaceManager, mode: bsp.LayoutMode) void {
+        self.default_layout = mode;
+        for (0..WORKSPACE_COUNT) |i| self.workspaces[i].setLayoutMode(mode);
     }
 
     pub fn getActiveWorkspace(self: *const WorkspaceManager) u8 {
@@ -149,7 +159,7 @@ pub const WorkspaceManager = struct {
 
     /// Whether `wid` would get at least its minimum size as a tiled window on workspace `ws`
     /// (tried on a copy, so nothing changes).
-    pub fn fitsOn(self: *const WorkspaceManager, wid: WindowId, ws: u8, screen_rect: Rect, gaps: GapConfig, mins: *const MinSizes) bool {
+    pub fn fitsOn(self: *const WorkspaceManager, wid: WindowId, ws: u8, screen_rect: Rect, gaps: GapConfig, mins: *const WindowHints) bool {
         if (ws < 1 or ws > WORKSPACE_COUNT) return false;
         var trial = self.workspaces[@as(usize, ws - 1)];
         if (!trial.hasWindow(wid)) trial.addWindow(wid);
@@ -157,7 +167,7 @@ pub const WorkspaceManager = struct {
     }
 
     /// First workspace after `after` (wrapping around, never `after` or `skip`) where `wid` fits; 0 if none.
-    pub fn findRoom(self: *const WorkspaceManager, wid: WindowId, after: u8, skip: u8, screen_rect: Rect, gaps: GapConfig, mins: *const MinSizes) u8 {
+    pub fn findRoom(self: *const WorkspaceManager, wid: WindowId, after: u8, skip: u8, screen_rect: Rect, gaps: GapConfig, mins: *const WindowHints) u8 {
         const start: usize = if (after >= 1 and after <= WORKSPACE_COUNT) after - 1 else 0;
         for (1..WORKSPACE_COUNT) |step| {
             const ws: u8 = @intCast((start + step) % WORKSPACE_COUNT + 1);
@@ -211,7 +221,7 @@ test "WorkspaceManager finds a workspace with room" {
     var wm = WorkspaceManager.init();
     const screen = Rect{ .x = 0, .y = 0, .width = 1000, .height = 600 };
     const gaps = GapConfig{ .inner = 0, .outer = 0 };
-    var mins = MinSizes{};
+    var mins = WindowHints{};
     mins.set(1, .{ .width = 700 });
     mins.set(2, .{ .width = 700 });
     mins.set(3, .{ .width = 700 });
