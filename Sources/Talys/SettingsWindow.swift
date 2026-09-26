@@ -28,8 +28,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             }
         }
         updateAppearance()
-        NSApp.activate()
+        // From a global hotkey Talys isn't active, and the cooperative `activate()` is refused then, leaving the
+        // window behind the frontmost app; force it forward.
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     /// Native controls (menus, text selection, scrollers) follow the theme's lightness.
@@ -77,12 +80,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     /// Talys runs without a menu bar of its own, so text fields get no copy/paste shortcuts unless a main menu
-    /// provides them. Deliberately has no Quit item, so ⌘Q in this window doesn't stop the window manager.
+    /// provides them. ⌘Q closes the settings window rather than quitting, so it doesn't stop the window manager.
     private func installEditMenuIfNeeded() {
         guard NSApp.mainMenu == nil else { return }
         let main = NSMenu()
         main.addItem(NSMenuItem(title: "Talys", action: nil, keyEquivalent: ""))
-        main.items[0].submenu = NSMenu(title: "Talys")
+        let appMenu = NSMenu(title: "Talys")
+        appMenu.addItem(withTitle: "Close Settings", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "q")
+        main.items[0].submenu = appMenu
 
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
