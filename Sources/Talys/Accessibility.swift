@@ -16,14 +16,15 @@ public struct ManagedWindow: @unchecked Sendable {
 
 public enum AccessibilityHelper {
 
-    public static func getAllStandardWindows() -> [ManagedWindow] {
+    public static func getAllStandardWindows(includeParked: Bool = false) -> [ManagedWindow] {
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
-            .flatMap { getStandardWindows(for: $0) }
+            .flatMap { getStandardWindows(for: $0, includeParked: includeParked) }
     }
 
-    /// On-screen standard windows of one app; windows parked offscreen (hidden workspaces, scratchpad) are skipped.
-    public static func getStandardWindows(for app: NSRunningApplication) -> [ManagedWindow] {
+    /// On-screen standard windows of one app; windows parked offscreen (hidden workspaces, scratchpad) are skipped
+    /// unless `includeParked`.
+    public static func getStandardWindows(for app: NSRunningApplication, includeParked: Bool = false) -> [ManagedWindow] {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         var windowsRef: CFTypeRef?
 
@@ -41,7 +42,7 @@ public enum AccessibilityHelper {
             let title = getTitle(for: window) ?? app.localizedName ?? "Untitled"
             let frame = getFrame(for: window) ?? .zero
 
-            if ParkingLot.isParked(frame) {
+            if !includeParked, ParkingLot.isParked(frame) {
                 continue
             }
 
@@ -78,12 +79,17 @@ public enum AccessibilityHelper {
 
     public static func getFocusedWindow() -> (element: AXUIElement, pid: pid_t)? {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
-        let appElement = AXUIElementCreateApplication(frontApp.processIdentifier)
+        return getFocusedWindow(of: frontApp.processIdentifier).map { ($0, frontApp.processIdentifier) }
+    }
+
+    /// The window `pid` considers focused, whether or not the app is frontmost.
+    public static func getFocusedWindow(of pid: pid_t) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(pid)
         var windowRef: CFTypeRef?
 
         if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
            let windowElem = windowRef, CFGetTypeID(windowElem) == AXUIElementGetTypeID() {
-            return (windowElem as! AXUIElement, frontApp.processIdentifier)
+            return (windowElem as! AXUIElement)
         }
         return nil
     }

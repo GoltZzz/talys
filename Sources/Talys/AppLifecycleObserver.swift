@@ -72,6 +72,7 @@ public final class AppLifecycleObserver: @unchecked Sendable {
                 if let app, app.activationPolicy == .regular {
                     self?.observe(app: app)
                     TilingController.shared.adoptWindows(of: app)
+                    TilingController.shared.revealActivatedApp(app)
                 }
                 TilingController.shared.syncCurrentFocus()
             }

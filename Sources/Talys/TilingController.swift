@@ -65,6 +65,8 @@ public final class TilingController {
     private var pressedTile: (wid: TalysWindowId, frame: CGRect)?
     /// How long after the button comes up to read the dropped window's frame; apps report AX moves a beat late.
     private static let dropReadDelay: TimeInterval = 0.05
+    /// How long after waking to wait for the displays to come back before recovering windows.
+    private static let wakeSettleDelay: TimeInterval = 1.5
 
     public var onWorkspaceChanged: ((UInt8) -> Void)?
     public var barConfig: BarConfig = BarConfig()
@@ -105,6 +107,15 @@ public final class TilingController {
             queue: .main
         ) { _ in
             MainActor.assumeIsolated { TilingController.shared.repark() }
+        }
+        // Sleep (or closing the lid) reshuffles the displays under parked windows; once they've settled, put
+        // everything back where it belongs and pick up any window that was lost along the way.
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.wakeSettleDelay) {
+                    MainActor.assumeIsolated { TilingController.shared.recoverAfterWake() }
+                }
+            }
         }
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
             MainActor.assumeIsolated { TilingController.shared.handleMouse(event.type) }
@@ -305,16 +316,74 @@ public final class TilingController {
         return true
     }
 
-    /// Picks up any on-screen windows of `app` we aren't tracking yet (addWindow ignores known ones).
-    /// Returns how many on-screen windows of the app are tracked afterwards.
+    /// Picks up any windows of `app` we aren't tracking yet (addWindow ignores known ones), rescuing parked strays.
+    /// Returns how many of its windows are on screen afterwards.
     @discardableResult
     public func adoptWindows(of app: NSRunningApplication) -> Int {
         guard isActive else { return 0 }
-        let windows = AccessibilityHelper.getStandardWindows(for: app)
+        return adopt(AccessibilityHelper.getStandardWindows(for: app, includeParked: true))
+    }
+
+    /// Tracks `windows`, bringing any that sit in the parking lot untracked back on screen first: nothing else
+    /// would ever unpark them (a window lost while asleep, say), and hidden they'd look like the app had no windows.
+    /// Returns how many of them are on screen or tracked afterwards.
+    @discardableResult
+    private func adopt(_ windows: [ManagedWindow]) -> Int {
+        var count = 0
+        var rescued = 0
         for w in windows {
+            if ParkingLot.isParked(w.frame) {
+                guard findRecord(for: w.element) == nil else { continue }
+                AccessibilityHelper.setFrame(for: w.element, frame: scratchpadFrame(index: rescued))
+                rescued += 1
+                print("[TilingController] Rescued untracked window \"\(w.title)\" from the parking lot")
+            }
             addWindow(element: w.element, pid: w.pid, title: w.title)
+            count += 1
         }
-        return windows.count
+        return count
+    }
+
+    /// Clicking an app in the Dock (or Cmd+Tab) activates it but leaves its windows where they are. When none of
+    /// them is on this workspace, go to the one it brings forward: its workspace, or the stashed scratchpad.
+    public func revealActivatedApp(_ app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        guard isActive, pid != getpid() else { return }
+        lock.lock()
+        let records = windowMap.values.filter { $0.pid == pid }
+        lock.unlock()
+        // Scrolled-off columns are on this workspace; `setFocusedWindow` scrolls them into view.
+        let hidden = records.filter { parked.contains($0.id) && !scrolledOff.contains($0.id) }
+        guard !hidden.isEmpty, hidden.count == records.count else { return }
+
+        let focused = AccessibilityHelper.getFocusedWindow(of: pid)
+        let target = hidden.first { r in focused.map { CFEqual($0, r.element) } ?? false }
+            ?? hidden.min { $0.id < $1.id }!
+
+        if isScratchpad(target.id) {
+            if !scratchpadVisible { toggleScratchpad() }
+            return
+        }
+        let ws = talys_engine_get_window_workspace(target.id)
+        guard ws != 0, ws != talys_engine_get_active_workspace() else { return }
+        print("[TilingController] \(app.localizedName ?? "App") activated; following it to workspace \(ws)")
+        switchWorkspace(ws, backAndForth: false)
+        AccessibilityHelper.focusWindow(element: target.element, pid: target.pid)
+        setFocusedWindow(element: target.element)
+    }
+
+    /// After sleep: re-park hidden windows on the displays as they are now and recover any that went missing.
+    public func recoverAfterWake() {
+        guard isActive else { return }
+        print("[TilingController] Woke up; re-checking windows.")
+        cleanupStaleWindows()
+        repark()
+        adoptingExisting = true
+        adopt(AccessibilityHelper.getAllStandardWindows(includeParked: true))
+        adoptingExisting = false
+        applyLayout()
+        refreshCurtain()
+        syncCurrentFocus()
     }
 
     public func removeWindow(element: AXUIElement) {
@@ -665,10 +734,7 @@ public final class TilingController {
         minSizes = minSizes.filter { scratchpad.contains($0.key) }
 
         adoptingExisting = true
-        let windows = AccessibilityHelper.getAllStandardWindows()
-        for w in windows {
-            addWindow(element: w.element, pid: w.pid, title: w.title)
-        }
+        adopt(AccessibilityHelper.getAllStandardWindows(includeParked: true))
         adoptingExisting = false
         retileHomes = []
 
@@ -1030,9 +1096,7 @@ public final class TilingController {
         print("[TilingController] Resumed on the home desktop.")
         guard isEnabled else { return }
         adoptingExisting = true
-        for w in AccessibilityHelper.getAllStandardWindows() {
-            addWindow(element: w.element, pid: w.pid, title: w.title)
-        }
+        adopt(AccessibilityHelper.getAllStandardWindows(includeParked: true))
         adoptingExisting = false
         applyLayout()
         refreshCurtain()
