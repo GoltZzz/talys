@@ -348,6 +348,29 @@ final class SettingsModel {
         write { $0.remove("keybindings", name) }
     }
 
+    static var backupURL: URL { ConfigManager.configURL.appendingPathExtension("bak") }
+
+    /// Replaces config.toml with the default one, keeping the old file alongside as config.toml.bak.
+    func resetAllToDefaults() {
+        let url = ConfigManager.configURL
+        let fm = FileManager.default
+        do {
+            if fm.fileExists(atPath: url.path) {
+                try? fm.removeItem(at: Self.backupURL)
+                try fm.copyItem(at: url, to: Self.backupURL)
+            }
+            try ConfigManager.defaultTomlContent.write(to: url, atomically: true, encoding: .utf8)
+            saveError = nil
+        } catch {
+            saveError = "Could not reset config.toml: \(error.localizedDescription)"
+            return
+        }
+        stopRecording()
+        config.window_rules = []
+        reload()
+        scheduleApply()
+    }
+
     func startRecording(_ target: Target) {
         recording = target
         recordingHint = nil

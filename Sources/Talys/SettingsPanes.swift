@@ -5,6 +5,7 @@ import SwiftUI
 
 struct GeneralPane: View {
     let model: SettingsModel
+    @State private var confirmingReset = false
 
     var body: some View {
         let s = SettingsSection.general
@@ -63,7 +64,20 @@ struct GeneralPane: View {
                     }
                     .fixedSize()
                 }
+                RowDivider()
+                SettingRow(title: "Reset to defaults",
+                           subtitle: "Restores every setting. Your current file is kept as config.toml.bak.") {
+                    Button("Reset…") { confirmingReset = true }
+                        .buttonStyle(.themed(.destructive))
+                        .fixedSize()
+                }
             }
+        }
+        .alert("Reset all settings to defaults?", isPresented: $confirmingReset) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) { model.resetAllToDefaults() }
+        } message: {
+            Text("Keybindings, commands, window rules, theme and bar settings go back to the defaults. The current config.toml is saved as config.toml.bak.")
         }
     }
 

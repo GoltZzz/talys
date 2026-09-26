@@ -274,7 +274,7 @@ public enum ConfigManager {
         return map
     }()
 
-    private static let defaultTomlContent = """
+    static let defaultTomlContent = """
 # Talys Configuration (~/.config/talys/config.toml)
 
 [general]
