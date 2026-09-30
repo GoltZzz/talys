@@ -38,6 +38,7 @@ public final class BarController: NSObject {
 
     public func updateConfig(_ config: BarConfig) {
         self.barConfig = config
+        applyWallpaperSources()
         if config.enabled {
             if panel == nil {
                 setupPanel()
@@ -117,8 +118,14 @@ public final class BarController: NSObject {
         self.wallpaperView = wallpaper
 
         newPanel.orderFrontRegardless()
+        applyWallpaperSources()
         wallpaper.refresh()
         print("[BarController] Talys floating bar panel displayed (height: \(barConfig.height)pt)")
+    }
+
+    private func applyWallpaperSources() {
+        wallpaperView?.overridePath = barConfig.wallpaper
+        wallpaperView?.searchDirectory = barConfig.wallpaper_dir
     }
 
     private func updatePanelFrame() {

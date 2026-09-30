@@ -529,6 +529,19 @@ struct BarPane: View {
                     ThemedSlider(value: model.number(\.bar.gap, "bar", "gap"), range: 0...30)
                 }
             }
+
+            SettingsCard(title: "Wallpaper behind the bar",
+                         footer: "Leave both empty to use the macOS wallpaper. The last one that loaded is cached, so a moved or deleted file keeps showing.") {
+                SettingRow(title: "Image", disabled: sizeDisabled) {
+                    ThemedTextField(placeholder: "~/Pictures/wallpaper.jpg", text: model.text(\.bar.wallpaper, "bar", "wallpaper"), monospaced: true)
+                        .frame(width: 240)
+                }
+                RowDivider()
+                SettingRow(title: "Look in folder", disabled: sizeDisabled) {
+                    ThemedTextField(placeholder: "~/Pictures", text: model.text(\.bar.wallpaper_dir, "bar", "wallpaper_dir"), monospaced: true)
+                        .frame(width: 240)
+                }
+            }
         }
     }
 

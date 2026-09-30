@@ -137,6 +137,10 @@ public struct BarConfig: Codable, Sendable {
     /// "talys" swaps the macOS menu bar for the Talys bar, "macos" keeps the menu bar and shows no Talys bar,
     /// "ask" asks on launch and writes the answer back here.
     public var menu_bar: String = "ask"
+    /// Image painted behind the bar instead of the wallpaper macOS reports; empty uses the macOS one.
+    public var wallpaper: String = ""
+    /// Folder searched (one level deep) for the wallpaper by name when macOS's path no longer exists.
+    public var wallpaper_dir: String = ""
 
     public init(
         enabled: Bool = true,
@@ -146,7 +150,9 @@ public struct BarConfig: Codable, Sendable {
         gap: Double = 8.0,
         theme: String = "catppuccin_mocha",
         clock_12h: Bool = true,
-        menu_bar: String = "ask"
+        menu_bar: String = "ask",
+        wallpaper: String = "",
+        wallpaper_dir: String = ""
     ) {
         self.enabled = enabled
         self.height = height
@@ -156,6 +162,8 @@ public struct BarConfig: Codable, Sendable {
         self.theme = theme
         self.clock_12h = clock_12h
         self.menu_bar = menu_bar
+        self.wallpaper = wallpaper
+        self.wallpaper_dir = wallpaper_dir
     }
 
     public init(from decoder: Decoder) throws {
@@ -169,6 +177,8 @@ public struct BarConfig: Codable, Sendable {
         theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? d.theme
         clock_12h = try c.decodeIfPresent(Bool.self, forKey: .clock_12h) ?? d.clock_12h
         menu_bar = try c.decodeIfPresent(String.self, forKey: .menu_bar) ?? d.menu_bar
+        wallpaper = try c.decodeIfPresent(String.self, forKey: .wallpaper) ?? d.wallpaper
+        wallpaper_dir = try c.decodeIfPresent(String.self, forKey: .wallpaper_dir) ?? d.wallpaper_dir
     }
 }
 
@@ -292,6 +302,8 @@ margin_horizontal = 14.0
 gap = 8.0
 clock_12h = true            # 12-hour clock (9:43 PM); false for 24-hour (21:43)
 menu_bar = "ask"            # "talys": Talys bar replaces the macOS menu bar (restored on quit); "macos": keep it, no Talys bar; "ask": ask on launch
+wallpaper = ""              # Image drawn behind the bar; empty uses the macOS wallpaper (last one seen is cached)
+wallpaper_dir = ""          # Folder to find the wallpaper in by name if its original file was moved, e.g. "~/Pictures"
 
 [gaps]
 inner = 8.0
