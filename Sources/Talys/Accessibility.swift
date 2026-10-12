@@ -71,10 +71,21 @@ public enum AccessibilityHelper {
         return true
     }
 
-    public static func isElementValid(_ element: AXUIElement) -> Bool {
+    public static func elementStatus(_ element: AXUIElement) -> AXError {
         var roleRef: CFTypeRef?
-        let err = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
-        return err == .success
+        return AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+    }
+
+    public static func isElementValid(_ element: AXUIElement) -> Bool {
+        elementStatus(element) == .success
+    }
+
+    /// nil means the app could not be queried, not that it has no windows.
+    static func windowElements(pid: pid_t) -> [AXUIElement]? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid),
+            kAXWindowsAttribute as CFString, &value) == .success else { return nil }
+        return value as? [AXUIElement]
     }
 
     public static func getFocusedWindow() -> (element: AXUIElement, pid: pid_t)? {

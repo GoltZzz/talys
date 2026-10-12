@@ -130,6 +130,12 @@ final class WindowRecovery {
 
     static var supportsWindowIdentity: Bool { windowIDFunction != nil }
 
+    static func windowID(of element: AXUIElement) -> CGWindowID? {
+        var id: CGWindowID = 0
+        guard let function = windowIDFunction, function(element, &id) == .success, id != 0 else { return nil }
+        return id
+    }
+
     private func currentTimestamp(for entry: RecoveryEntry) -> Date? {
         entry.timestamp(launchDate: NSRunningApplication(processIdentifier: entry.pid)?.launchDate,
                         processStartTime: RecoveryProcessIdentity.startTime(pid: entry.pid))

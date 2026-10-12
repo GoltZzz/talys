@@ -4,15 +4,25 @@ import CTalysEngine
 
 public final class WindowRecord {
     public let id: TalysWindowId
-    public let element: AXUIElement
+    public var element: AXUIElement
     public let pid: pid_t
+    public let windowServerID: CGWindowID?
     public var title: String
 
+    @MainActor
     public init(id: TalysWindowId, element: AXUIElement, pid: pid_t, title: String) {
         self.id = id
         self.element = element
+        self.windowServerID = WindowRecovery.windowID(of: element)
         self.pid = pid
         self.title = title
+    }
+
+    @MainActor
+    func matches(_ candidate: AXUIElement, identity: WindowIdentity?) -> Bool {
+        if CFEqual(element, candidate) { return true }
+        guard let identity, let ownIdentity = WindowIdentity(pid: pid, windowID: windowServerID) else { return false }
+        return identity == ownIdentity
     }
 }
 
@@ -69,6 +79,10 @@ public final class TilingController {
     private static let dropReadDelay: TimeInterval = 0.05
     /// How long after waking to wait for the displays to come back before recovering windows.
     private static let wakeSettleDelay: TimeInterval = 1.5
+    private var desktopSuspensions: Set<String> = []
+    private var wakeGeneration = 0
+    private var cleanupAllowedAfter: TimeInterval = 0
+    private var staleWindowChecks = StaleWindowChecks()
 
     public var onWorkspaceChanged: ((UInt8) -> Void)?
     public var barConfig: BarConfig = BarConfig()
@@ -92,7 +106,7 @@ public final class TilingController {
     public private(set) var isAwayFromHome = false
 
     /// Tiling runs only when enabled and on the home Space; elsewhere Talys can't see its windows.
-    private var isActive: Bool { isEnabled && !isAwayFromHome }
+    private var isActive: Bool { isEnabled && !isAwayFromHome && desktopSuspensions.isEmpty }
 
     private let lock = NSLock()
 
@@ -112,12 +126,26 @@ public final class TilingController {
         ) { _ in
             MainActor.assumeIsolated { TilingController.shared.repark() }
         }
-        // Sleep (or closing the lid) reshuffles the displays under parked windows; once they've settled, put
-        // everything back where it belongs and pick up any window that was lost along the way.
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
-            NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { _ in
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.wakeSettleDelay) {
-                    MainActor.assumeIsolated { TilingController.shared.recoverAfterWake() }
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for (sleep, wake, reason) in [
+            (NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification, "sleep"),
+            (NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification, "screen"),
+            (NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.sessionDidBecomeActiveNotification, "session")
+        ] {
+            workspaceCenter.addObserver(forName: sleep, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { self.suspendDesktop(reason) }
+            }
+            workspaceCenter.addObserver(forName: wake, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { self.resumeDesktop(reason) }
+            }
+        }
+        // Locking with Control-Command-Q can happen without system sleep.
+        for (name, locked) in [("com.apple.screenIsLocked", true), ("com.apple.screenIsUnlocked", false)] {
+            DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name(name), object: nil, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated {
+                    if locked { self.suspendDesktop("lock") } else { self.resumeDesktop("lock") }
                 }
             }
         }
@@ -217,10 +245,23 @@ public final class TilingController {
     }
 
     public func cleanupStaleWindows() {
+        guard canCheckWindowRemoval else { return }
         lock.lock()
         var staleIds: [TalysWindowId] = []
         for (wid, record) in windowMap {
-            if !AccessibilityHelper.isElementValid(record.element) {
+            let status = AccessibilityHelper.elementStatus(record.element)
+            var confirmedAbsent = false
+            if status == .invalidUIElement,
+               let windows = AccessibilityHelper.windowElements(pid: record.pid) {
+                if let replacement = windows.first(where: {
+                    record.matches($0, identity: WindowIdentity($0))
+                }) {
+                    record.element = replacement
+                } else {
+                    confirmedAbsent = true
+                }
+            }
+            if staleWindowChecks.shouldRemove(wid, status: status, confirmedAbsent: confirmedAbsent) {
                 staleIds.append(wid)
             }
         }
@@ -247,10 +288,14 @@ public final class TilingController {
     }
 
     public func findRecord(for element: AXUIElement) -> WindowRecord? {
+        let identity = WindowIdentity(element)
         lock.lock()
         defer { lock.unlock() }
         for (_, record) in windowMap {
-            if CFEqual(record.element, element) {
+            if record.matches(element, identity: identity) {
+                if !CFEqual(record.element, element), AccessibilityHelper.isElementValid(element) {
+                    record.element = element
+                }
                 return record
             }
         }
@@ -263,9 +308,12 @@ public final class TilingController {
         guard isActive else { return false }
         guard AccessibilityHelper.isStandardWindow(element) else { return false }
 
+        let identity = WindowIdentity(pid: pid, windowID: WindowRecovery.windowID(of: element))
         lock.lock()
         for (_, record) in windowMap {
-            if CFEqual(record.element, element) {
+            if record.matches(element, identity: identity) {
+                record.element = element
+                staleWindowChecks.forget(record.id)
                 lock.unlock()
                 return false
             }
@@ -379,12 +427,35 @@ public final class TilingController {
         setFocusedWindow(element: target.element)
     }
 
+    private func suspendDesktop(_ reason: String) {
+        desktopSuspensions.insert(reason)
+        wakeGeneration += 1
+        staleWindowChecks = StaleWindowChecks()
+        WindowAnimator.shared.stop()
+    }
+
+    private func resumeDesktop(_ reason: String) {
+        desktopSuspensions.remove(reason)
+        guard desktopSuspensions.isEmpty else { return }
+        wakeGeneration += 1
+        let generation = wakeGeneration
+        cleanupAllowedAfter = ProcessInfo.processInfo.systemUptime + 30
+        staleWindowChecks = StaleWindowChecks()
+        for delay in [Self.wakeSettleDelay, 3, 6, 12, 20] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, generation == self.wakeGeneration,
+                      self.desktopSuspensions.isEmpty else { return }
+                self.recoverAfterWake()
+            }
+        }
+    }
+
     /// After sleep: re-park hidden windows on the displays as they are now and recover any that went missing.
     public func recoverAfterWake() {
         if !isEnabled { unparkAll(); return }
         guard isActive else { return }
         print("[TilingController] Woke up; re-checking windows.")
-        cleanupStaleWindows()
+        rebindTrackedWindows()
         repark()
         adoptingExisting = true
         adopt(AccessibilityHelper.getAllStandardWindows(includeParked: true))
@@ -394,20 +465,42 @@ public final class TilingController {
         syncCurrentFocus()
     }
 
-    public func removeWindow(element: AXUIElement) {
-        lock.lock()
-        var foundWid: TalysWindowId?
-        for (wid, record) in windowMap {
-            if CFEqual(record.element, element) {
-                foundWid = wid
-                break
+    /// Refresh AX handles without rebuilding engine membership or scratchpad state.
+    private func rebindTrackedWindows() {
+        for pid in Set(windowMap.values.map { $0.pid }) {
+            guard let windows = AccessibilityHelper.windowElements(pid: pid) else { continue }
+            for record in windowMap.values where record.pid == pid {
+                guard let element = windows.first(where: {
+                    record.matches($0, identity: WindowIdentity($0))
+                }) else { continue }
+                record.element = element
             }
         }
+    }
 
-        if let wid = foundWid {
+    private var canCheckWindowRemoval: Bool {
+        StaleWindowChecks.canCheckRemoval(
+            suspended: !desktopSuspensions.isEmpty, awayFromHome: isAwayFromHome,
+            uptime: ProcessInfo.processInfo.systemUptime, allowedAfter: cleanupAllowedAfter)
+    }
+
+    public func removeWindow(element: AXUIElement) {
+        // A destruction notification during sleep/unlock can refer to an obsolete AX handle.
+        // Leave it tracked until desktop recovery and the health check can verify its absence.
+        guard canCheckWindowRemoval, let record = findRecord(for: element),
+              let windows = AccessibilityHelper.windowElements(pid: record.pid) else { return }
+        if let replacement = windows.first(where: {
+            record.matches($0, identity: WindowIdentity($0))
+        }) {
+            record.element = replacement
+            staleWindowChecks.forget(record.id)
+            return
+        }
+        lock.lock()
+        if let wid = windowMap[record.id]?.id {
             windowMap.removeValue(forKey: wid)
             lock.unlock()
-            BorderController.shared.clearTarget(ifMatching: element)
+            BorderController.shared.clearTarget(ifMatching: record.element)
             if parked.remove(wid) != nil { refreshCurtain() }
             forget([wid])
             if isScratchpad(wid) {
@@ -915,6 +1008,7 @@ public final class TilingController {
     /// Drops what's known about windows that are gone.
     private func forget(_ wids: [TalysWindowId]) {
         for wid in wids {
+            staleWindowChecks.forget(wid)
             lastVisibleFrames.removeValue(forKey: wid)
             minSizes.removeValue(forKey: wid)
             scrolledOff.remove(wid)
@@ -1258,6 +1352,7 @@ public final class TilingController {
 
     /// Displays changed, so the parking lot moved; bring every parked window along.
     public func repark() {
+        guard desktopSuspensions.isEmpty, !isAwayFromHome else { return }
         if !isEnabled { unparkAll(); return }
         lock.lock()
         let records = parked.compactMap { windowMap[$0] }
