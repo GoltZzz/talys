@@ -7,8 +7,10 @@ Thanks for wanting to help! Talys is an early-stage project and there's plenty t
 ### Requirements
 
 - macOS 14 (Sonoma) or newer
-- [Zig](https://ziglang.org/download/) 0.16
+- [Zig](https://ziglang.org/download/) **0.17.0** (the pinned project toolchain)
 - Swift 6 (comes with Xcode 16 or the Xcode Command Line Tools)
+
+Talys uses Zig 0.17.0, the latest stable release as of October 12, 2026. Check your active compiler with `zig version`; the Makefile rejects other versions with a clear message. If you keep multiple compilers installed, select one with `make build ZIG=/absolute/path/to/zig`. Future Zig releases need validation before changing the pinned version. On macOS, the engine defaults to the same macOS 14 deployment target as the Swift app.
 
 ### Build and run
 
@@ -22,10 +24,40 @@ make run
 
 | Command | What it does |
 |---|---|
+| `make run` | Build, sign, and launch Talys in the foreground |
 | `make build` | Build `Talys.app` without running it |
+| `make swift` | Build the Zig engine and Swift release executable |
+| `make app` | Build and assemble the signed app bundle (same result as `make build`) |
 | `make zig` | Build only the Zig engine into `Sources/CTalysEngine/libtalys_engine.a` |
 | `make clean` | Remove all build output |
 | `make icon` | Regenerate the app icon and `Resources/logo.svg` from `TalysLogo.swift` |
+| `make install-agent` | Build the app and install/load the LaunchAgent; it expects Talys at `/Applications/Talys.app` |
+| `make uninstall-agent` | Unload/remove the LaunchAgent and restore system settings |
+
+To launch an already-built app without rebuilding:
+
+```bash
+open ./Talys.app
+```
+
+For foreground output in your terminal:
+
+```bash
+./Talys.app/Contents/MacOS/talys
+```
+
+Quit the existing instance before starting another. `Ctrl+C` requests a normal quit when Talys is running in the foreground.
+
+The LaunchAgent runs Talys at login and restarts it after it exits (`KeepAlive`). `make install-agent` does not copy the built app to `/Applications`; place it there first. Unload the agent before standalone recovery so it does not restart Talys during the rescue.
+
+The executable also supports these commands, which do not start tiling:
+
+| Command | Purpose |
+|---|---|
+| `./Talys.app/Contents/MacOS/talys --check-config` | Print the resolved default config and keybindings |
+| `./Talys.app/Contents/MacOS/talys --check-config /path/to/config.toml` | Inspect a specified config file |
+| `./Talys.app/Contents/MacOS/talys --recover-windows` | Recover recorded hidden windows; quit Talys first |
+| `./Talys.app/Contents/MacOS/talys --restore-shortcuts` | Restore Spotlight, Mission Control shortcuts, and menu bar settings |
 
 On first launch, grant Talys **Accessibility** access in System Settings → Privacy & Security → Accessibility. Because each build is ad-hoc signed, macOS may ask again after a rebuild. If windows stop moving, toggle Talys off and on in that list.
 
@@ -55,7 +87,7 @@ cd zig-engine && zig build test
 
 Add tests next to the code you change. The existing `test` blocks in `constraints.zig` are a good model.
 
-The Swift side has no automated tests yet, so please test your change by hand with `make run`. Try it with a few apps open (a terminal, a browser, something with a minimum window size) and switch workspaces. Talys writes its log to `~/Library/Logs/Talys.log`, which is the first place to look when something misbehaves.
+Build the engine with `make zig`, then run `swift test` for the Swift recovery journal and geometry tests. Window movement through macOS Accessibility still needs manual validation; use the [window recovery checklist](docs/window-recovery.md) and test changes by hand with `make run`. Try it with a few apps open (a terminal, a browser, something with a minimum window size) and switch workspaces. Talys writes its log to `~/Library/Logs/Talys.log`, which is the first place to look when something misbehaves.
 
 ## Ideas for where to help
 

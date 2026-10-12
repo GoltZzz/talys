@@ -18,6 +18,7 @@ let package = Package(
             path: "Sources/CTalysEngine",
             publicHeadersPath: "include"
         ),
+        .testTarget(name: "TalysTests", dependencies: ["Talys"]),
         .executableTarget(
             name: "Talys",
             dependencies: [

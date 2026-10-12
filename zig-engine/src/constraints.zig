@@ -113,7 +113,7 @@ pub fn distribute(total: f64, gap: f64, mins: []const f64, out: []f64) bool {
     }
 
     // Pin the slots whose minimum exceeds the running fair share until the share stops changing.
-    var pinned = [_]bool{false} ** 256;
+    var pinned: [256]bool = @splat(false);
     const limit = @min(n, pinned.len);
     var share: f64 = 0;
     while (true) {

@@ -83,14 +83,14 @@ pub export fn talys_engine_get_focus() WindowId {
 pub export fn talys_engine_focus_direction(direction: u8, screen_rect: Rect) WindowId {
     if (!is_initialized) return 0;
     if (direction > 3) return 0;
-    const dir: Direction = @enumFromInt(direction);
+    const dir: Direction = @fromBackingInt(@intCast(direction));
     return global_workspaces.getActiveEngine().focusDirection(dir, screen_rect, global_gaps, &global_mins) orelse 0;
 }
 
 pub export fn talys_engine_swap_direction(direction: u8, screen_rect: Rect) bool {
     if (!is_initialized) return false;
     if (direction > 3) return false;
-    const dir: Direction = @enumFromInt(direction);
+    const dir: Direction = @fromBackingInt(@intCast(direction));
     return global_workspaces.getActiveEngine().swapDirection(dir, screen_rect, global_gaps, &global_mins);
 }
 
@@ -135,20 +135,20 @@ pub export fn talys_engine_cycle_layout() void {
 
 pub export fn talys_engine_get_layout_mode() u8 {
     if (!is_initialized) return 0;
-    return @intFromEnum(global_workspaces.getActiveEngine().layout_mode);
+    return @backingInt(global_workspaces.getActiveEngine().layout_mode);
 }
 
 pub export fn talys_engine_set_layout_mode(mode: u8) void {
     if (!is_initialized) return;
     if (mode <= 4) {
-        global_workspaces.getActiveEngine().setLayoutMode(@enumFromInt(mode));
+        global_workspaces.getActiveEngine().setLayoutMode(@fromBackingInt(@intCast(mode)));
     }
 }
 
 /// Puts every workspace in `mode`, and keeps it as the layout they go back to on a reset.
 pub export fn talys_engine_set_default_layout_mode(mode: u8) void {
     if (!is_initialized) talys_engine_init();
-    if (mode <= 4) global_workspaces.setDefaultLayout(@enumFromInt(mode));
+    if (mode <= 4) global_workspaces.setDefaultLayout(@fromBackingInt(@intCast(mode)));
 }
 
 /// Newest tiled window on the active workspace that can't get its minimum size; 0 when everything fits.
@@ -192,7 +192,7 @@ pub export fn talys_engine_cycle_column_width() void {
 pub export fn talys_engine_consume_or_expel(direction: u8) bool {
     if (!is_initialized) return false;
     if (direction > 3) return false;
-    return global_workspaces.getActiveEngine().consumeOrExpel(@enumFromInt(direction));
+    return global_workspaces.getActiveEngine().consumeOrExpel(@fromBackingInt(@intCast(direction)));
 }
 
 pub export fn talys_engine_get_active_workspace() u8 {

@@ -49,7 +49,7 @@ pub const Node = struct {
 };
 
 pub const BspEngine = struct {
-    nodes: [MAX_NODES]Node = [_]Node{.{}} ** MAX_NODES,
+    nodes: [MAX_NODES]Node = @splat(.{}),
     free_list: [MAX_NODES]NodeIndex = undefined,
     free_count: usize = 0,
 
@@ -1231,7 +1231,7 @@ test "BspEngine smart stays sound through random use" {
                     next += 1;
                 },
                 3 => if (next > 1) a.removeWindow(random.uintLessThan(WindowId, next - 1) + 1),
-                4 => _ = a.swapDirection(@enumFromInt(random.uintLessThan(u8, 4)), screen, gaps, &hints),
+                4 => _ = a.swapDirection(@fromBackingInt(@intCast(random.uintLessThan(u8, 4))), screen, gaps, &hints),
                 else => a.resizeFocused(if (random.boolean()) 0.05 else -0.05),
             }
             // The same history gives the same layout.

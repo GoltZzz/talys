@@ -12,6 +12,7 @@ public final class BarController: NSObject {
 
     public var onToggleEnabled: ((Bool) -> Void)?
     public var onReloadConfig: (() -> Void)?
+    public var onRevealAllWindows: (() -> Void)?
     public var onRetileAll: (() -> Void)?
     public var onSwitchWorkspace: ((UInt8) -> Void)?
     public var onCycleLayout: (() -> Void)?
@@ -185,6 +186,10 @@ public final class BarController: NSObject {
         menuBarItem.target = self
         menu.addItem(menuBarItem)
 
+        let revealItem = NSMenuItem(title: "Reveal All Windows", action: #selector(revealAllClicked), keyEquivalent: "")
+        revealItem.target = self
+        menu.addItem(revealItem)
+
         let retileItem = NSMenuItem(title: "Retile All", action: #selector(retileClicked), keyEquivalent: "")
         retileItem.target = self
         applyShortcut(for: .retile, to: retileItem)
@@ -303,6 +308,10 @@ public final class BarController: NSObject {
 
     @objc private func restoreMenuBarClicked() {
         onRestoreMenuBar?()
+    }
+
+    @objc private func revealAllClicked() {
+        onRevealAllWindows?()
     }
 
     @objc private func retileClicked() {

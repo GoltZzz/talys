@@ -32,6 +32,21 @@ It's meant to feel like a Linux tiling setup such as Hyprland, while running as 
 
 The layout engine is written in **Zig**. It does pure math with no macOS code, which keeps it fast and portable. The **Swift** layer is the native macOS side: it watches your windows, catches hotkeys, and draws the bar, launcher and borders.
 
+## Build and launch
+
+Building requires macOS 14 or newer, Swift 6, and Zig **0.17.0**. The build checks the Zig version; see the [toolchain requirements](CONTRIBUTING.md#requirements).
+
+From the repository directory:
+
+```bash
+make run                    # Build, sign, and launch Talys
+make build                  # Build the app without launching it
+open ./Talys.app            # Launch the existing build without rebuilding
+./Talys.app/Contents/MacOS/talys  # Run the existing build in the foreground
+```
+
+Choose one launch command at a time. Grant Talys Accessibility access on first launch. For tests, build targets, login startup, and recovery commands, see [Contributing](CONTRIBUTING.md#build-and-run).
+
 ## Troubleshooting / FAQ
 
 **Talys isn't moving any windows.**
@@ -48,6 +63,17 @@ If a macOS shortcut (such as a Mission Control one) uses the same keys as a Taly
 
 **My menu bar or Spotlight shortcut changed.**
 If you chose the Talys bar, Talys sets the macOS menu bar to hide automatically while it runs, and it can take over `Cmd + Space`. Both go back to how they were when you quit. If you change the menu bar setting in System Settings while Talys runs, Talys keeps your change. After a force quit, run `talys --restore-shortcuts` to put them back. To switch, set `menu_bar` under `[bar]` in the config to `"talys"` or `"macos"`, or use "Use Talys Bar" / "Restore macOS Menu Bar" in the launcher. Set it to `"ask"` to see the prompt again.
+
+**A window is hidden or Talys was force quit.**
+Use **Reveal All Windows** in the Talys bar menu or launcher. It restores Talys-hidden windows to their last visible position and size, adjusted to fit the current display, and disables tiling until you enable it again. Recovered scratchpad windows become ordinary windows when tiling resumes. After an interrupted session, Talys automatically attempts recovery and starts with tiling disabled.
+
+To recover without starting the window manager, quit any running Talys instance and run:
+
+```bash
+./Talys.app/Contents/MacOS/talys --recover-windows
+```
+
+The command needs Accessibility access. It exits with status 1 if recovery is incomplete; return to the macOS desktop containing those windows and retry. Records remain in `~/.config/talys/window-recovery.json` until recovery is confirmed or the owning app process has ended. The journal covers windows hidden by this version of Talys; it cannot restore frames that an older version never recorded. Manually minimized windows stay minimized. System settings can be restored separately with `--restore-shortcuts`.
 
 ## Status & Roadmap
 

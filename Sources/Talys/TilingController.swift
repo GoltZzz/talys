@@ -30,6 +30,8 @@ public final class TilingController {
     private var scratchpadVisible = false
     /// Windows currently sitting in the parking lot (hidden workspaces and the stashed scratchpad).
     private var parked: Set<TalysWindowId> = []
+    private var lastVisibleFrames: [TalysWindowId: CGRect] = [:]
+    private var recoveryGeneration = 0
     /// Where the last layout put each tiled window on the active workspace.
     private var layoutTargets: [TalysWindowId: CGRect] = [:]
     /// Newly added windows, until when they're held to their tile. Some apps restore a saved frame a beat
@@ -74,7 +76,9 @@ public final class TilingController {
     public var isEnabled: Bool = true {
         didSet {
             TalysDesktopState.shared.isTilingEnabled = isEnabled
+            guard isEnabled != oldValue else { return }
             if isEnabled {
+                recoveryGeneration += 1
                 retileAll()
             } else {
                 // Untiled, nothing would ever bring hidden workspaces back; show everything.
@@ -271,6 +275,9 @@ public final class TilingController {
         nextId += 1
         let record = WindowRecord(id: wid, element: element, pid: pid, title: title)
         windowMap[wid] = record
+        if let frame = AccessibilityHelper.getFrame(for: element), RecoveryJournal.reachable(frame, in: recoveryBounds) {
+            lastVisibleFrames[wid] = frame
+        }
         lock.unlock()
 
         let appName = NSRunningApplication(processIdentifier: pid)?.localizedName
@@ -374,6 +381,7 @@ public final class TilingController {
 
     /// After sleep: re-park hidden windows on the displays as they are now and recover any that went missing.
     public func recoverAfterWake() {
+        if !isEnabled { unparkAll(); return }
         guard isActive else { return }
         print("[TilingController] Woke up; re-checking windows.")
         cleanupStaleWindows()
@@ -776,7 +784,8 @@ public final class TilingController {
                     park(record)
                     curtainChanged = true
                 } else {
-                    // Slide out of view first; `windowPlaced` parks it on arrival.
+                    // Journal before the first offscreen animation frame, not just on arrival.
+                    guard prepareParking(record) else { continue }
                     parkOnArrival.insert(wid)
                     let current = AccessibilityHelper.getFrame(for: record.element) ?? targetFrame
                     animationFrames.append((element: record.element, currentFrame: current, targetFrame: targetFrame))
@@ -906,6 +915,7 @@ public final class TilingController {
     /// Drops what's known about windows that are gone.
     private func forget(_ wids: [TalysWindowId]) {
         for wid in wids {
+            lastVisibleFrames.removeValue(forKey: wid)
             minSizes.removeValue(forKey: wid)
             scrolledOff.remove(wid)
             parkOnArrival.remove(wid)
@@ -915,6 +925,11 @@ public final class TilingController {
     /// Called once the animator has given a window its final frame.
     fileprivate func windowPlaced(element: AXUIElement, target: CGRect) {
         guard isActive, let record = findRecord(for: element) else { return }
+        if !parked.contains(record.id), RecoveryJournal.reachable(target, in: recoveryBounds),
+           let actual = AccessibilityHelper.getFrame(for: element), RecoveryJournal.reachable(actual, in: recoveryBounds) {
+            lastVisibleFrames[record.id] = actual
+            WindowRecovery.shared.acknowledgeVisible(element, pid: record.pid, bounds: recoveryBounds)
+        }
         if parkOnArrival.remove(record.id) != nil {
             if scrolledOff.contains(record.id) {
                 park(record)
@@ -1162,6 +1177,7 @@ public final class TilingController {
             for (i, record) in records.enumerated() {
                 parked.remove(record.id)
                 AccessibilityHelper.setFrame(for: record.element, frame: scratchpadFrame(index: i))
+                WindowRecovery.shared.acknowledgeVisible(record.element, pid: record.pid, bounds: recoveryBounds)
             }
             refreshCurtain()
             if let top = records.last {
@@ -1196,9 +1212,26 @@ public final class TilingController {
 
     // MARK: - Parking
 
+    private var recoveryBounds: CGRect {
+        let screen = Self.getAxScreenRect()
+        return CGRect(x: screen.x, y: screen.y, width: screen.width, height: screen.height)
+    }
+
+    private func prepareParking(_ record: WindowRecord) -> Bool {
+        if let actual = AccessibilityHelper.getFrame(for: record.element),
+           !parked.contains(record.id), RecoveryJournal.reachable(actual, in: recoveryBounds) {
+            lastVisibleFrames[record.id] = actual
+        }
+        let frame = lastVisibleFrames[record.id] ?? scratchpadFrame(index: 0)
+        return WindowRecovery.shared.prepare(record.element, pid: record.pid, frame: frame)
+    }
+
     private func park(_ record: WindowRecord) {
+        guard prepareParking(record) else { return }
         parked.insert(record.id)
-        AccessibilityHelper.setPosition(for: record.element, to: ParkingLot.parkPoint())
+        if !AccessibilityHelper.setPosition(for: record.element, to: ParkingLot.parkPoint()) {
+            print("[Recovery] Parking failed for window \(record.id); record retained.")
+        }
     }
 
     /// Covers whatever sliver of the parked windows macOS keeps on screen. Apps that settle their position
@@ -1225,6 +1258,7 @@ public final class TilingController {
 
     /// Displays changed, so the parking lot moved; bring every parked window along.
     public func repark() {
+        if !isEnabled { unparkAll(); return }
         lock.lock()
         let records = parked.compactMap { windowMap[$0] }
         lock.unlock()
@@ -1232,16 +1266,36 @@ public final class TilingController {
         refreshCurtain()
     }
 
-    /// Puts every parked window back on screen (centered, cascaded) so quitting never strands one.
+    /// Rescue leaves tiling disabled so workspace rules cannot hide recovered windows again.
+    public func revealAllWindows() {
+        if isEnabled { isEnabled = false } else { unparkAll() }
+    }
+
     public func unparkAll() {
-        lock.lock()
-        let records = parked.compactMap { windowMap[$0] }
-        lock.unlock()
-        for (i, record) in records.enumerated() {
-            AccessibilityHelper.setFrame(for: record.element, frame: scratchpadFrame(index: i))
+        WindowAnimator.shared.stop()
+        parkOnArrival.removeAll()
+        pendingFollow = nil
+        recoveryGeneration += 1
+        recoverWindows(attempt: 0, generation: recoveryGeneration)
+    }
+
+    private func recoverWindows(attempt: Int, generation: Int) {
+        guard generation == recoveryGeneration else { return }
+        WindowRecovery.shared.recover(bounds: recoveryBounds)
+        parked = parked.filter { wid in
+            guard let record = windowMap[wid], let frame = AccessibilityHelper.getFrame(for: record.element) else { return true }
+            return !RecoveryJournal.reachable(frame, in: recoveryBounds)
         }
-        parked.removeAll()
+        scrolledOff.formIntersection(parked)
+        // Recovered scratchpad windows become ordinary windows when tiling is enabled again.
+        scratchpad.removeAll { !parked.contains($0) }
+        updateScratchpadState()
         CurtainController.shared.hide()
+        if WindowRecovery.shared.hasPending && attempt < 3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.recoverWindows(attempt: attempt + 1, generation: generation)
+            }
+        }
     }
 
     /// Centered at ~60% of the usable screen, cascading slightly when several windows are stashed.

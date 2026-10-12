@@ -71,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let config = withMenuBarChoice(ConfigManager.loadConfig())
         applyConfig(config)
+        if WindowRecovery.shared.hasPending {
+            print("[Recovery] Interrupted session detected. Revealing windows; tiling remains disabled.")
+            tilingController.revealAllWindows()
+        }
 
         guard keyboardManager.start() else {
             print("[Talys] Could not start keyboard manager. Exiting.")
@@ -81,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar.onToggleEnabled = { enabled in
             TilingController.shared.isEnabled = enabled
             print("[Talys] Tiling \(enabled ? "enabled" : "disabled")")
+        }
+        bar.onRevealAllWindows = {
+            TilingController.shared.revealAllWindows()
         }
         bar.onRetileAll = {
             TilingController.shared.retileAll()
@@ -177,6 +184,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .command("scratchpad", "Toggle Scratchpad", subtitle: "Show or hide stashed windows", symbol: "tray.full.fill") {
                 tc.toggleScratchpad()
             },
+            .command("recover", "Reveal All Windows", subtitle: "Recover hidden windows and disable tiling", symbol: "macwindow.on.rectangle") {
+                tc.revealAllWindows()
+            },
             .command("retile", "Retile All Windows", subtitle: "Re-scan and tile the current workspace", symbol: "square.grid.2x2.fill") {
                 tc.retileAll()
             },
@@ -248,6 +258,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Give AX clients time to report their restored frames before the process exits.
+        tilingController.revealAllWindows()
+        guard WindowRecovery.shared.hasPending else { return .terminateNow }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) {
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         SpotlightTakeover.shared.restore()
         MissionControlShortcuts.shared.restore()
@@ -281,6 +301,26 @@ struct TalysApp {
             SpotlightTakeover.shared.restore()
             MissionControlShortcuts.shared.restore()
             MenuBarAutoHide.shared.restore()
+            return
+        }
+
+        guard WindowRecovery.shared.acquireLock() else { exit(1) }
+        if args.contains("--recover-windows") {
+            guard ensureAccessibilityPermissions(prompt: true) else {
+                print("[Recovery] Grant Accessibility access to Talys, then retry --recover-windows.")
+                exit(1)
+            }
+            var bar = BarConfig()
+            bar.enabled = false
+            let screen = TilingController.getAxScreenRect(barConfig: bar)
+            let bounds = CGRect(x: screen.x, y: screen.y, width: screen.width, height: screen.height)
+            for attempt in 0..<4 {
+                WindowRecovery.shared.recover(bounds: bounds)
+                if !WindowRecovery.shared.hasPending { break }
+                if attempt < 3 { Thread.sleep(forTimeInterval: 0.3) }
+            }
+            if WindowRecovery.shared.hasPending { exit(1) }
+            print("[Recovery] All recorded windows recovered. Tiling was not started.")
             return
         }
 

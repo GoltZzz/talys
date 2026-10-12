@@ -564,7 +564,7 @@ fn tryEverything(baseline: *const Tree, search: *Search) void {
     }
 
     // Heap's algorithm: every order of the windows.
-    var c = [_]usize{0} ** EXHAUSTIVE_LIMIT;
+    var c: [EXHAUSTIVE_LIMIT]usize = @splat(0);
     tryShapes(order[0..n], search);
     var i: usize = 1;
     while (i < n) {
