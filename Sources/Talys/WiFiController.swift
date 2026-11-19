@@ -77,6 +77,7 @@ final class WiFiController {
     @ObservationIgnored private var scanned: [String: CWNetwork] = [:]
     @ObservationIgnored private var detailsTimer: Timer?
     @ObservationIgnored private var scanTimer: Timer?
+    @ObservationIgnored private let locationManager = CLLocationManager()
 
     private init() {}
 
@@ -203,7 +204,7 @@ final class WiFiController {
     // MARK: - Polling
 
     func refreshDetails() {
-        locationDenied = [.denied, .restricted].contains(CLLocationManager().authorizationStatus)
+        locationDenied = [.denied, .restricted].contains(locationManager.authorizationStatus)
 
         guard let interface, interface.powerOn() else {
             isPowered = false

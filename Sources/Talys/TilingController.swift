@@ -833,6 +833,9 @@ public final class TilingController {
         windowMap = windowMap.filter { scratchpad.contains($0.key) }
         lock.unlock()
         minSizes = minSizes.filter { scratchpad.contains($0.key) }
+        lastVisibleFrames = lastVisibleFrames.filter { scratchpad.contains($0.key) }
+        settling = settling.filter { scratchpad.contains($0.key) }
+        staleWindowChecks.retainOnly(Set(scratchpad))
 
         adoptingExisting = true
         adopt(AccessibilityHelper.getAllStandardWindows(includeParked: true))

@@ -45,6 +45,7 @@ final class BluetoothController {
     private var started = false
     private var panelOpen = false
     private var fullRefreshInFlight = false
+    private var refreshGeneration = 0
     private var lastFullRefresh = Date.distantPast
     private var lastConnectedKey = ""
 
@@ -76,6 +77,7 @@ final class BluetoothController {
     func start() {
         guard !started else { return }
         started = true
+        refreshGeneration += 1
         isPowered = Self.readPower()
         refreshNow()
 
@@ -91,6 +93,8 @@ final class BluetoothController {
         timer = nil
         started = false
         panelOpen = false
+        fullRefreshInFlight = false
+        refreshGeneration += 1
     }
 
     /// Called when the Bluetooth popover opens or closes. While it is open, the paired list and
@@ -154,13 +158,7 @@ final class BluetoothController {
 
         let known = Set(devices.map(\.id))
         for (id, live) in byID where !known.contains(id) {
-            if var device = Self.device(from: live) {
-                if let existing = devices.first(where: { $0.id == device.id }) {
-                    device.battery = existing.battery
-                    device.batteryLeft = existing.batteryLeft
-                    device.batteryRight = existing.batteryRight
-                    device.batteryCase = existing.batteryCase
-                }
+            if let device = Self.device(from: live) {
                 devices.append(device)
             }
         }
@@ -197,8 +195,10 @@ final class BluetoothController {
             return
         }
 
+        let expected = refreshGeneration
         Task {
             let snapshot = await Self.loadSnapshot()
+            guard self.started, self.refreshGeneration == expected else { return }
             if let snapshot {
                 self.apply(snapshot)
             }

@@ -7,7 +7,8 @@ public final class BarController: NSObject {
     private var panel: FloatingBarPanel?
     private var hostingView: NSHostingView<TalysBarView>?
     private var wallpaperView: WallpaperStripView?
-    private var wallpaperTimer: Timer?
+    private nonisolated(unsafe) var wallpaperTimer: Timer?
+    private nonisolated(unsafe) var notificationTokens: [(NotificationCenter, NSObjectProtocol)] = []
     private var barConfig: BarConfig
 
     public var onToggleEnabled: ((Bool) -> Void)?
@@ -33,8 +34,10 @@ public final class BarController: NSObject {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        wallpaperTimer?.invalidate()
+        for (center, token) in notificationTokens {
+            center.removeObserver(token)
+        }
     }
 
     public func updateConfig(_ config: BarConfig) {
@@ -47,8 +50,11 @@ public final class BarController: NSObject {
                 updatePanelFrame()
             }
         } else {
+            stopWallpaperTimer()
             panel?.orderOut(nil)
             panel = nil
+            hostingView = nil
+            wallpaperView = nil
             BluetoothController.shared.stop()
         }
     }
@@ -122,6 +128,7 @@ public final class BarController: NSObject {
         self.hostingView = hosting
         self.wallpaperView = wallpaper
         BluetoothController.shared.start()
+        startWallpaperTimer()
 
         newPanel.orderFrontRegardless()
         applyWallpaperSources()
@@ -143,7 +150,7 @@ public final class BarController: NSObject {
     }
 
     private func setupObservers() {
-        NotificationCenter.default.addObserver(
+        let screenToken = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
             queue: .main
@@ -152,8 +159,9 @@ public final class BarController: NSObject {
                 self?.updatePanelFrame()
             }
         }
+        notificationTokens.append((NotificationCenter.default, screenToken))
         // Each Space can have its own wallpaper.
-        NSWorkspace.shared.notificationCenter.addObserver(
+        let spaceToken = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
             queue: .main
@@ -162,12 +170,22 @@ public final class BarController: NSObject {
                 self?.wallpaperView?.refresh()
             }
         }
+        notificationTokens.append((NSWorkspace.shared.notificationCenter, spaceToken))
+    }
+
+    private func startWallpaperTimer() {
+        guard wallpaperTimer == nil else { return }
         // macOS posts nothing public when the wallpaper changes, so check now and then.
         wallpaperTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.wallpaperView?.refresh()
             }
         }
+    }
+
+    private func stopWallpaperTimer() {
+        wallpaperTimer?.invalidate()
+        wallpaperTimer = nil
     }
 
     public func showBrandMenu() {

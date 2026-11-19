@@ -21,4 +21,8 @@ struct StaleWindowChecks {
     mutating func forget(_ id: UInt32) {
         misses.removeValue(forKey: id)
     }
+
+    mutating func retainOnly(_ ids: Set<UInt32>) {
+        misses = misses.filter { ids.contains($0.key) }
+    }
 }

@@ -19,11 +19,16 @@ final class WallpaperStripView: NSView {
     private var image: NSImage?
     /// Every input the lookup depends on, including modification dates, so a file replaced in place is picked up too.
     private var imageKey: String?
+    /// Draw-time options and frame, so we only redraw when something visible actually changed.
+    private var appearanceKey: String?
 
     /// Bumped on every lookup so a snapshot that finishes after the wallpaper changed again is dropped.
     private var generation = 0
     /// Screen Recording is requested at most once per launch; afterwards Talys only checks whether it was granted.
     private static var requestedCaptureAccess = false
+    /// Set when the wallpaper file is missing and Screen Recording isn't granted yet, so we only re-check
+    /// permission on the 5s timer instead of re-reading and re-decoding the cached PNG every tick.
+    private var waitingForCaptureAccess = false
 
     private static let cacheDirectory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Caches/talys", isDirectory: true)
@@ -37,13 +42,23 @@ final class WallpaperStripView: NSView {
         let key = [override, reported, directory].map { url in
             "\(url?.path ?? "")|\(Self.modified(url)?.timeIntervalSince1970 ?? 0)"
         }.joined(separator: "#")
+        var changed = false
         if key != imageKey {
             imageKey = key
             generation += 1
+            waitingForCaptureAccess = false
             image = loadImage(override: override, reported: reported, directory: directory, screen: screen)
+            changed = true
+        } else if waitingForCaptureAccess, CGPreflightScreenCaptureAccess() {
+            waitingForCaptureAccess = false
+            snapshotWallpaper(of: screen, cache: Self.cacheURL(for: screen))
         }
-        // Scaling and fill options can change without the image changing.
-        needsDisplay = true
+        // Scaling, fill options, or window geometry can change without the image changing.
+        let newAppearanceKey = appearanceKey(for: screen)
+        if changed || newAppearanceKey != appearanceKey {
+            appearanceKey = newAppearanceKey
+            needsDisplay = true
+        }
     }
 
     private func loadImage(override: URL?, reported: URL?, directory: URL?, screen: NSScreen) -> NSImage? {
@@ -70,8 +85,8 @@ final class WallpaperStripView: NSView {
                 print("[Bar] Wallpaper file is missing; asking for Screen Recording to snapshot the desktop.")
                 CGRequestScreenCaptureAccess()
             }
-            // Try again on the next refresh in case access is granted meanwhile.
-            imageKey = nil
+            // Re-check permission on the next refresh without reloading the cached image each tick.
+            waitingForCaptureAccess = true
             return
         }
         guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return }
@@ -148,6 +163,16 @@ final class WallpaperStripView: NSView {
 
     private static func modified(_ url: URL?) -> Date? {
         url.flatMap { (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.modificationDate] as? Date }
+    }
+
+    private func appearanceKey(for screen: NSScreen) -> String {
+        let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
+        let scaling = (options[.imageScaling] as? NSNumber)?.uintValue ?? 0
+        let clipping = (options[.allowClipping] as? NSNumber)?.boolValue ?? true
+        let fill = (options[.fillColor] as? NSColor)?.usingColorSpace(.sRGB)?.description ?? ""
+        let screenRect = NSStringFromRect(screen.frame)
+        let windowRect = window.map { NSStringFromRect($0.frame) } ?? ""
+        return "\(scaling)|\(clipping)|\(fill)|\(screenRect)|\(windowRect)"
     }
 
     override func draw(_ dirtyRect: NSRect) {

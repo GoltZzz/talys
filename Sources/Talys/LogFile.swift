@@ -62,17 +62,25 @@ final class LogFile: @unchecked Sendable {
 
     private func pump(_ reader: FileHandle) {
         var pending = Data()
-        while true {
-            let chunk = reader.availableData
-            if chunk.isEmpty { break }
-            terminal?.write(chunk)
-            pending.append(chunk)
-            while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
-                write(line: pending[pending.startIndex..<newline])
-                pending.removeSubrange(pending.startIndex...newline)
+        var eof = false
+        while !eof {
+            autoreleasepool {
+                let chunk = reader.availableData
+                if chunk.isEmpty {
+                    eof = true
+                    return
+                }
+                terminal?.write(chunk)
+                pending.append(chunk)
+                while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
+                    write(line: pending[pending.startIndex..<newline])
+                    pending.removeSubrange(pending.startIndex...newline)
+                }
             }
         }
-        if !pending.isEmpty { write(line: pending) }
+        if !pending.isEmpty {
+            autoreleasepool { write(line: pending) }
+        }
         try? file?.close()
         drained.signal()
     }
