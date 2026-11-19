@@ -29,19 +29,22 @@ public struct TalysBarView: View {
     public var onShowBrandMenu: (() -> Void)?
     public var onShowVolumeMenu: (() -> Void)?
     public var onShowWiFiMenu: (() -> Void)?
+    public var onShowBluetoothMenu: (() -> Void)?
 
     public init(
         onSwitchWorkspace: ((UInt8) -> Void)? = nil,
         onCycleLayout: (() -> Void)? = nil,
         onShowBrandMenu: (() -> Void)? = nil,
         onShowVolumeMenu: (() -> Void)? = nil,
-        onShowWiFiMenu: (() -> Void)? = nil
+        onShowWiFiMenu: (() -> Void)? = nil,
+        onShowBluetoothMenu: (() -> Void)? = nil
     ) {
         self.onSwitchWorkspace = onSwitchWorkspace
         self.onCycleLayout = onCycleLayout
         self.onShowBrandMenu = onShowBrandMenu
         self.onShowVolumeMenu = onShowVolumeMenu
         self.onShowWiFiMenu = onShowWiFiMenu
+        self.onShowBluetoothMenu = onShowBluetoothMenu
     }
 
     public var body: some View {
@@ -60,7 +63,8 @@ public struct TalysBarView: View {
                 desktopState: desktopState,
                 onCycleLayout: onCycleLayout,
                 onShowVolumeMenu: onShowVolumeMenu,
-                onShowWiFiMenu: onShowWiFiMenu
+                onShowWiFiMenu: onShowWiFiMenu,
+                onShowBluetoothMenu: onShowBluetoothMenu
             )
         }
         .padding(.horizontal, 14)
@@ -206,8 +210,11 @@ private struct RightIslandView: View {
     var onCycleLayout: (() -> Void)?
     var onShowVolumeMenu: (() -> Void)?
     var onShowWiFiMenu: (() -> Void)?
+    var onShowBluetoothMenu: (() -> Void)?
     @State private var volumeHovered = false
     @State private var wifiHovered = false
+    @State private var bluetoothHovered = false
+    @State private var bluetooth = BluetoothController.shared
 
     var body: some View {
         HStack(spacing: 10) {
@@ -255,6 +262,53 @@ private struct RightIslandView: View {
             )
             .help(volumeHelp)
             .padding(.horizontal, -6)
+
+            // Bluetooth: click for the paired-device panel. The charge ring wraps the rune.
+            HStack(spacing: 4) {
+                ZStack {
+                    if bluetooth.isPowered, let device = bluetooth.primaryDevice {
+                        if let battery = device.battery {
+                            Circle()
+                                .stroke(Color.white.opacity(0.10), lineWidth: 1.4)
+                            Circle()
+                                .trim(from: 0, to: CGFloat(battery) / 100)
+                                .stroke(bluetoothBatteryColor(battery),
+                                        style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                        }
+                    }
+
+                    BluetoothIcon(
+                        size: CGSize(width: 7, height: 10),
+                        color: bluetoothStateColor,
+                        slashed: !bluetooth.isPowered
+                    )
+                }
+                .frame(width: 17, height: 17)
+
+                if bluetooth.isPowered, let device = bluetooth.primaryDevice {
+                    Text(device.name)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Palette.subtext0)
+                        .lineLimit(1)
+                        .frame(maxWidth: 80, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(bluetoothHovered ? Palette.surface0.opacity(0.7) : Color.clear)
+            .clipShape(Capsule())
+            .overlay(
+                PointerInputCatcher(
+                    onClick: { onShowBluetoothMenu?() },
+                    onRightClick: {},
+                    onScroll: { _ in },
+                    onHover: { bluetoothHovered = $0 }
+                )
+            )
+            .padding(.horizontal, -6)
+            .help(bluetoothHelp)
+            .animation(.snappy(duration: 0.2), value: bluetooth.primaryDevice?.battery)
 
             // Wi-Fi: click for the Wi-Fi panel
             HStack(spacing: 4) {
@@ -332,6 +386,23 @@ private struct RightIslandView: View {
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.3), radius: 6, x: 0, y: 2)
+    }
+
+    private var bluetoothStateColor: Color {
+        guard bluetooth.isPowered else { return Palette.overlay0.opacity(0.7) }
+        return bluetooth.primaryDevice == nil ? Palette.overlay0 : Palette.accent
+    }
+
+    private var bluetoothHelp: String {
+        guard bluetooth.isPowered else { return "Bluetooth is off — click to manage" }
+        guard let device = bluetooth.primaryDevice else {
+            return "Bluetooth — no device connected. Click for paired devices."
+        }
+        if let battery = device.battery {
+            let detail = device.batteryHelp.map { " · \($0)" } ?? ""
+            return "\(device.name) — \(battery)%\(detail) · click for Bluetooth"
+        }
+        return "\(device.name) — connected · click for Bluetooth"
     }
 
     private var volumeIcon: String {

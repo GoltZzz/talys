@@ -49,6 +49,7 @@ public final class BarController: NSObject {
         } else {
             panel?.orderOut(nil)
             panel = nil
+            BluetoothController.shared.stop()
         }
     }
 
@@ -100,6 +101,9 @@ public final class BarController: NSObject {
             },
             onShowWiFiMenu: { [weak self] in
                 self?.showWiFiMenu()
+            },
+            onShowBluetoothMenu: { [weak self] in
+                self?.showBluetoothMenu()
             }
         )
 
@@ -117,6 +121,7 @@ public final class BarController: NSObject {
         self.panel = newPanel
         self.hostingView = hosting
         self.wallpaperView = wallpaper
+        BluetoothController.shared.start()
 
         newPanel.orderFrontRegardless()
         applyWallpaperSources()
@@ -262,6 +267,11 @@ public final class BarController: NSObject {
     /// Toggles the Wi-Fi panel, centred under the pointer and hanging just below the bar.
     public func showWiFiMenu() {
         togglePopover(.wifi)
+    }
+
+    /// Toggles the Bluetooth panel, centred under the pointer and hanging just below the bar.
+    public func showBluetoothMenu() {
+        togglePopover(.bluetooth)
     }
 
     private func togglePopover(_ kind: BarPopover) {

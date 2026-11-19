@@ -5,6 +5,7 @@ import SwiftUI
 enum BarPopover {
     case sound
     case wifi
+    case bluetooth
 }
 
 /// Borderless window that keeps its top edge fixed while SwiftUI grows or shrinks the content.
@@ -134,6 +135,7 @@ final class BarPopoverController {
         switch kind {
         case .sound: AnyView(AudioPanelView())
         case .wifi: AnyView(WiFiPanelView(availableHeight: availableHeight))
+        case .bluetooth: AnyView(BluetoothPanelView())
         }
     }
 
@@ -144,6 +146,8 @@ final class BarPopoverController {
             AudioSourceMonitor.shared.start()
         case .wifi:
             WiFiController.shared.start()
+        case .bluetooth:
+            BluetoothController.shared.setPanelOpen(true)
         }
     }
 
@@ -154,6 +158,8 @@ final class BarPopoverController {
             AudioSourceMonitor.shared.stop()
         case .wifi:
             WiFiController.shared.stop()
+        case .bluetooth:
+            BluetoothController.shared.setPanelOpen(false)
         }
     }
 

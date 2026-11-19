@@ -1,7 +1,7 @@
 .PHONY: all build zig swift app icon run clean install-agent uninstall-agent
 
 ZIG ?= zig
-ZIG_VERSION = 0.17.0
+ZIG_VERSION = 0.17
 
 APP_NAME = Talys
 APP_BUNDLE = $(APP_NAME).app
@@ -12,10 +12,11 @@ all: build
 
 zig:
 	@talys_zig_version=$$("$(ZIG)" version) && \
-		if [ "$$talys_zig_version" != "$(ZIG_VERSION)" ]; then \
-			echo "Talys requires Zig $(ZIG_VERSION); found $$talys_zig_version. Set ZIG=/path/to/zig to select the required compiler."; \
-			exit 1; \
-		fi
+		case "$$talys_zig_version" in \
+			$(ZIG_VERSION).*) ;; \
+			*) echo "Talys requires Zig $(ZIG_VERSION).x; found $$talys_zig_version. Set ZIG=/path/to/zig to select the required compiler."; \
+			exit 1 ;; \
+		esac
 	@echo "==> Building Zig tiling engine..."
 	@cd zig-engine && "$(ZIG)" build -Doptimize=ReleaseFast
 	@echo "==> Re-packing archive for Apple linker alignment..."

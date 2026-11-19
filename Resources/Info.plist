@@ -22,6 +22,8 @@
     <string>Talys needs accessibility access to manage and tile your windows.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Talys shows a live microphone level in the sound panel while it's open. Audio is never recorded or stored.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Talys shows Bluetooth status and device battery in the bar, and lets you connect or disconnect paired devices.</string>
     <key>NSLocationUsageDescription</key>
     <string>macOS only reveals the Wi-Fi network name to apps with Location access. Talys uses it to show your network in the bar.</string>
     <key>NSLocationWhenInUseUsageDescription</key>

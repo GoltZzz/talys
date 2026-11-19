@@ -7,10 +7,10 @@ Thanks for wanting to help! Talys is an early-stage project and there's plenty t
 ### Requirements
 
 - macOS 14 (Sonoma) or newer
-- [Zig](https://ziglang.org/download/) **0.17.0** (the pinned project toolchain)
+- [Zig](https://ziglang.org/download/) **0.17.x** (the pinned project toolchain)
 - Swift 6 (comes with Xcode 16 or the Xcode Command Line Tools)
 
-Talys uses Zig 0.17.0, the latest stable release as of October 12, 2026. Check your active compiler with `zig version`; the Makefile rejects other versions with a clear message. If you keep multiple compilers installed, select one with `make build ZIG=/absolute/path/to/zig`. Future Zig releases need validation before changing the pinned version. On macOS, the engine defaults to the same macOS 14 deployment target as the Swift app.
+Talys uses Zig 0.17.x (any patch release). Check your active compiler with `zig version`; the Makefile rejects other minor versions with a clear message. If you keep multiple compilers installed, select one with `make build ZIG=/absolute/path/to/zig`. Future Zig releases need validation before changing the pinned version. On macOS, the engine defaults to the same macOS 14 deployment target as the Swift app.
 
 ### Build and run
 

@@ -1,12 +1,14 @@
 import Cocoa
+import ScreenCaptureKit
 
 /// Paints the slice of the desktop wallpaper behind the bar's window, so the bar can cover the macOS menu bar
 /// without changing how the top of the screen looks.
 ///
 /// The image is looked up in order: `bar.wallpaper`, the file macOS reports, a same-named file in
-/// `bar.wallpaper_dir`, then the last one that loaded on this display (kept in ~/Library/Caches/talys, so a
-/// wallpaper whose file was moved, renamed or deleted keeps working). Dynamic and aerial wallpapers show a still
-/// frame; when nothing loads, the strip falls back to the Desktop fill color.
+/// `bar.wallpaper_dir`, then a snapshot of the wallpaper window macOS is showing (needs Screen Recording; this
+/// covers a wallpaper whose file was deleted, which macOS keeps showing from memory), then the last one that
+/// loaded on this display (kept in ~/Library/Caches/talys). Dynamic and aerial wallpapers show a still frame;
+/// when nothing loads, the strip falls back to the Desktop fill color.
 @MainActor
 final class WallpaperStripView: NSView {
     /// `bar.wallpaper`: an image to use instead of the one macOS reports.
@@ -17,6 +19,11 @@ final class WallpaperStripView: NSView {
     private var image: NSImage?
     /// Every input the lookup depends on, including modification dates, so a file replaced in place is picked up too.
     private var imageKey: String?
+
+    /// Bumped on every lookup so a snapshot that finishes after the wallpaper changed again is dropped.
+    private var generation = 0
+    /// Screen Recording is requested at most once per launch; afterwards Talys only checks whether it was granted.
+    private static var requestedCaptureAccess = false
 
     private static let cacheDirectory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Caches/talys", isDirectory: true)
@@ -32,6 +39,7 @@ final class WallpaperStripView: NSView {
         }.joined(separator: "#")
         if key != imageKey {
             imageKey = key
+            generation += 1
             image = loadImage(override: override, reported: reported, directory: directory, screen: screen)
         }
         // Scaling and fill options can change without the image changing.
@@ -49,7 +57,65 @@ final class WallpaperStripView: NSView {
             }
             return image
         }
+        // No readable file: show the cached copy for now and replace it with what macOS is actually drawing.
+        snapshotWallpaper(of: screen, cache: cache)
         return cache.flatMap { try? Data(contentsOf: $0) }.flatMap(NSImage.init(data:))
+    }
+
+    /// Captures only the Desktop-level wallpaper window (no icons, widgets or other windows) and caches it.
+    private func snapshotWallpaper(of screen: NSScreen, cache: URL?) {
+        if !CGPreflightScreenCaptureAccess() {
+            if !Self.requestedCaptureAccess {
+                Self.requestedCaptureAccess = true
+                print("[Bar] Wallpaper file is missing; asking for Screen Recording to snapshot the desktop.")
+                CGRequestScreenCaptureAccess()
+            }
+            // Try again on the next refresh in case access is granted meanwhile.
+            imageKey = nil
+            return
+        }
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return }
+        let displayID = number.uint32Value
+        let scale = screen.backingScaleFactor
+        let expected = generation
+        Task { @MainActor [weak self] in
+            guard let data = await Self.captureWallpaper(displayID: displayID, scale: scale) else {
+                print("[Bar] Couldn't snapshot the desktop wallpaper.")
+                return
+            }
+            guard let self, self.generation == expected, let image = NSImage(data: data) else { return }
+            if let cache {
+                try? FileManager.default.createDirectory(at: Self.cacheDirectory, withIntermediateDirectories: true)
+                try? data.write(to: cache, options: .atomic)
+            }
+            self.image = image
+            self.needsDisplay = true
+        }
+    }
+
+    /// PNG data of the wallpaper window covering the given display, at full resolution.
+    private nonisolated static func captureWallpaper(displayID: CGDirectDisplayID, scale: CGFloat) async -> Data? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        else { return nil }
+        // The wallpaper is the lowest full-screen window below the desktop icons (macOS 26+ puts it one level
+        // under kCGDesktopWindowLevel, so match by "below the icons" rather than an exact level).
+        let iconLevel = Int(CGWindowLevelForKey(.desktopIconWindow))
+        let bounds = CGDisplayBounds(displayID)
+        guard let window = content.windows.filter({
+            $0.windowLayer < iconLevel && $0.frame.intersects(bounds)
+                && $0.frame.width >= bounds.width && $0.frame.height >= bounds.height
+        }).min(by: { $0.windowLayer < $1.windowLayer }) else { return nil }
+        let config = SCStreamConfiguration()
+        config.width = Int(window.frame.width * scale)
+        config.height = Int(window.frame.height * scale)
+        config.showsCursor = false
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        guard let cgImage = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        else { return nil }
+        // Record the size in points so the PNG (and the cached copy) reloads at screen size, not pixel size.
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        rep.size = window.frame.size
+        return rep.representation(using: .png, properties: [:])
     }
 
     /// A file in `directory` (or one level below it) with the same name as the missing wallpaper, ignoring the

@@ -19,7 +19,7 @@ It's meant to feel like a Linux tiling setup such as Hyprland, while running as 
 - **Automatic tiling.** The default Smart layout tries every way to arrange your windows and picks the one that suits each best: terminals get tall columns, browsers don't stretch past a useful width, and nothing shrinks below the size its app needs. You can also switch to dwindle, master-stack, scrolling or monocle.
 - **Keyboard first.** Move focus, swap windows, resize splits, float and fullscreen, all from home-row keys.
 - **Workspaces.** Nine virtual workspaces that replace macOS desktops (Spaces), with per-app rules that send apps to their own workspace.
-- **Built-in status bar.** A themed bar at the top of the screen shows your workspaces, the time, battery, Wi-Fi and volume. On first launch Talys asks whether to use it in place of the macOS menu bar, which it then hides and covers while Talys runs.
+- **Built-in status bar.** A themed bar at the top of the screen shows your workspaces, the time, battery, Wi-Fi, Bluetooth and volume. On first launch Talys asks whether to use it in place of the macOS menu bar, which it then hides and covers while Talys runs.
 - **Launcher.** Fuzzy-search your apps and Talys commands. It can take over `Cmd + Space` from Spotlight.
 - **Scratchpad.** Hide windows out of the way and bring them back over whatever workspace you're on.
 - **Active window borders.** Borders with rounded corners and a gradient show which window has focus, with smooth animations.
@@ -34,7 +34,7 @@ The layout engine is written in **Zig**. It does pure math with no macOS code, w
 
 ## Build and launch
 
-Building requires macOS 14 or newer, Swift 6, and Zig **0.17.0**. The build checks the Zig version; see the [toolchain requirements](CONTRIBUTING.md#requirements).
+Building requires macOS 14 or newer, Swift 6, and Zig **0.17.x**. The build checks the Zig version; see the [toolchain requirements](CONTRIBUTING.md#requirements).
 
 From the repository directory:
 
